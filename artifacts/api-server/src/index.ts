@@ -1,5 +1,6 @@
-import app from "./app";
-import { logger } from "./lib/logger";
+import app from "./app.js";
+import { logger } from "./lib/logger.js";
+import { startWhatsAppBot } from "./whatsapp/bot.js";
 
 const rawPort = process.env["PORT"];
 
@@ -17,9 +18,13 @@ if (Number.isNaN(port) || port <= 0) {
 
 app.listen(port, (err) => {
   if (err) {
-    logger.error({ err }, "Error listening on port");
+    logger.error({ err }, "Erro ao iniciar servidor");
     process.exit(1);
   }
 
-  logger.info({ port }, "Server listening");
+  logger.info({ port }, "Servidor iniciado com sucesso");
+
+  startWhatsAppBot().catch((err) => {
+    logger.error({ err }, "Erro fatal ao iniciar bot WhatsApp");
+  });
 });

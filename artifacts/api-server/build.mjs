@@ -29,6 +29,18 @@ async function buildAll() {
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
+      // Baileys and its dependencies — externalized because they use dynamic requires,
+      // crypto native bindings, and other patterns incompatible with esbuild bundling
+      "@whiskeysockets/baileys",
+      "@adiwajshing/keyed-db",
+      "@hapi/boom",
+      "noise-handshake",
+      "libsignal",
+      "wasm-crypto",
+      "get-browser-rtc",
+      "link-preview-js",
+      "@aws-sdk/client-s3",
+      // General unbundleable packages
       "sharp",
       "better-sqlite3",
       "sqlite3",
