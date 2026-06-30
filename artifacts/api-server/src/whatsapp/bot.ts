@@ -7,6 +7,7 @@ import makeWASocketImport, {
 import { Boom } from "@hapi/boom";
 import qrcodeTerminal from "qrcode-terminal";
 import path from "node:path";
+import { rm } from "node:fs/promises";
 import { logger } from "../lib/logger.js";
 import { whatsappState } from "./state.js";
 
@@ -18,6 +19,57 @@ const WEBHOOK_URL =
   "https://boblost-assistente-core.lovable.app/api/public/webhook";
 const WEBHOOK_TIMEOUT_MS = 8000;
 const AUTH_DIR = path.resolve(process.cwd(), ".whatsapp-session");
+
+// ─── Fix 2: Cache Baileys version after first successful fetch ────────────────
+// fetchLatestBaileysVersion() makes an HTTP request. If it fails during reconnect
+// (network blip), the catch block fires and schedules a 10s retry that also starts
+// with the same failing network call — an infinite loop that never generates a QR.
+// Caching the version after the first success breaks this dependency.
+let cachedVersion: [number, number, number] | null = null;
+
+async function getBaileysVersion(): Promise<[number, number, number]> {
+  if (cachedVersion) return cachedVersion;
+  try {
+    const { version } = await fetchLatestBaileysVersion();
+    cachedVersion = version;
+    logger.info({ version }, "Versão do Baileys obtida do servidor");
+    return cachedVersion;
+  } catch (err) {
+    // Fallback to a known-good version so reconnect can proceed without network
+    const fallback: [number, number, number] = [2, 3000, 1023853467];
+    logger.warn({ err, fallback }, "Falha ao buscar versão do Baileys — usando fallback embutido");
+    cachedVersion = fallback;
+    return fallback;
+  }
+}
+
+// ─── Fix 3: Guard against concurrent startWhatsAppBot() calls ────────────────
+// Without this, both the connection.update handler and the catch block can schedule
+// a reconnect in the same error window, creating two sockets that race to read and
+// write the same auth state files (useMultiFileAuthState has no file locking).
+let isStarting = false;
+
+// ─── Fix 1: Fatal disconnect codes that invalidate auth state ────────────────
+// These codes mean the credentials on disk are permanently invalid. Re-using them
+// causes an immediate re-rejection with the same code, looping forever without
+// ever reaching the QR generation step. The auth directory must be cleared so the
+// next connection starts with fresh keys and triggers a new QR.
+const FATAL_DISCONNECT_CODES = new Set([
+  DisconnectReason.loggedOut,  // 401 — user removed this device from their phone
+  DisconnectReason.badSession, // 500 — corrupted session state
+  DisconnectReason.forbidden,  // 403 — account banned or session blocked
+]);
+
+async function clearAuthState(): Promise<void> {
+  try {
+    await rm(AUTH_DIR, { recursive: true, force: true });
+    logger.info({ authDir: AUTH_DIR }, "Estado de autenticação limpo — próxima conexão gerará novo QR");
+  } catch (err) {
+    logger.warn({ err }, "Erro ao limpar estado de autenticação");
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function callWebhook(
   userId: string,
@@ -68,13 +120,21 @@ async function callWebhook(
 }
 
 export async function startWhatsAppBot(): Promise<void> {
+  // ── Fix 3: prevent concurrent starts ──────────────────────────────────────
+  if (isStarting) {
+    logger.warn("startWhatsAppBot já em execução — chamada duplicada ignorada");
+    return;
+  }
+  isStarting = true;
+
   logger.info("Iniciando bot WhatsApp...");
 
   try {
+    // ── Fix 2: use cached version, never block on network during reconnect ──
+    const version = await getBaileysVersion();
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    const { version } = await fetchLatestBaileysVersion();
 
-    logger.info({ version, authDir: AUTH_DIR }, "Versão do Baileys carregada");
+    logger.info({ version, authDir: AUTH_DIR }, "Sessão carregada, criando socket...");
 
     const sock: WASocket = makeWASocket({
       version,
@@ -87,7 +147,7 @@ export async function startWhatsAppBot(): Promise<void> {
 
     sock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", (update) => {
+    sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -106,21 +166,26 @@ export async function startWhatsAppBot(): Promise<void> {
         whatsappState.qr = null;
 
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-        logger.warn(
-          { statusCode, shouldReconnect },
-          "Conexão com WhatsApp encerrada",
-        );
+        logger.warn({ statusCode }, "Conexão com WhatsApp encerrada");
 
-        const delay = shouldReconnect ? 3000 : 5000;
-        logger.info(
-          { delay },
-          shouldReconnect
-            ? "Reconectando automaticamente..."
-            : "Sessão encerrada (logout) — reconectando para novo QR...",
-        );
-        setTimeout(() => startWhatsAppBot(), delay);
+        // ── Fix 1: clear stale auth state for fatal codes ──────────────────
+        // For codes that permanently invalidate the session, delete the auth
+        // directory so the next connection starts clean and generates a QR.
+        // Without this, the bot loops forever re-trying with invalid creds.
+        if (statusCode !== undefined && FATAL_DISCONNECT_CODES.has(statusCode)) {
+          logger.info(
+            { statusCode },
+            "Código fatal detectado — limpando autenticação para gerar novo QR",
+          );
+          await clearAuthState();
+        }
+
+        // Release the guard BEFORE scheduling the reconnect so the timer
+        // callback can acquire it normally when it runs.
+        isStarting = false;
+        logger.info("Reconectando em 3 segundos...");
+        setTimeout(() => startWhatsAppBot(), 3000);
       }
 
       if (connection === "open") {
@@ -188,6 +253,8 @@ export async function startWhatsAppBot(): Promise<void> {
       { err },
       "Erro crítico ao iniciar bot WhatsApp — tentando novamente em 10s",
     );
+    // Release guard so the retry can run
+    isStarting = false;
     setTimeout(() => startWhatsAppBot(), 10_000);
   }
 }
