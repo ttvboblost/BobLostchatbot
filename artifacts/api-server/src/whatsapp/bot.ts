@@ -157,8 +157,13 @@ export async function startWhatsAppBot(): Promise<void> {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
+        const isUpdate = whatsappState.qr !== null;
         whatsappState.qr = qr;
+        whatsappState.qrTimestamp = Date.now();
         whatsappState.status = "aguardando_qr";
+        logger.info(
+          isUpdate ? "QR atualizado — novo QR gerado" : "Novo QR gerado — aguardando escaneamento",
+        );
         logger.info(
           "══════════════════════════════════════\n" +
             "  QR Code gerado — escaneie com o WhatsApp  \n" +
@@ -170,7 +175,9 @@ export async function startWhatsAppBot(): Promise<void> {
       if (connection === "close") {
         whatsappState.status = "desconectado";
         whatsappState.qr = null;
+        whatsappState.qrTimestamp = null;
         whatsappState.sock = null;
+        logger.info("QR limpo — conexão encerrada");
 
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
 
@@ -198,6 +205,9 @@ export async function startWhatsAppBot(): Promise<void> {
       if (connection === "open") {
         whatsappState.status = "conectado";
         whatsappState.qr = null;
+        whatsappState.qrTimestamp = null;
+        logger.info("QR limpo — conexão estabelecida com sucesso");
+        logger.info("Status alterado: conectado");
         logger.info("✅ WhatsApp conectado com sucesso!");
       }
     });

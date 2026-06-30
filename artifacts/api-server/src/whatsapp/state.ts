@@ -8,6 +8,10 @@ export interface ActiveSocket {
 
 interface WhatsAppState {
   qr: string | null;
+  // Unix epoch (ms) of the last time qr was set or cleared.
+  // Lets the dashboard distinguish a fresh QR from a stale one and detect
+  // that the state changed even if the QR string itself is identical.
+  qrTimestamp: number | null;
   status: ConnectionStatus;
   processedIds: Set<string>;
   sock: ActiveSocket | null;
@@ -15,6 +19,7 @@ interface WhatsAppState {
 
 export const whatsappState: WhatsAppState = {
   qr: null,
+  qrTimestamp: null,
   status: "desconectado",
   processedIds: new Set(),
   sock: null,

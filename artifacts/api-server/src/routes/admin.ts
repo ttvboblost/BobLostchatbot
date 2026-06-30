@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { whatsappState } from "../whatsapp/state.js";
+import { whatsappState, type ConnectionStatus } from "../whatsapp/state.js";
 import { callWebhook } from "../whatsapp/bot.js";
 import { logger } from "../lib/logger.js";
 
@@ -10,6 +10,37 @@ const router: IRouter = Router();
 const SUPPORTED_ACTIONS = new Set(["trigger_command"]);
 const SUPPORTED_COMMANDS = new Set(["status"]);
 
+// ── Status mapping ────────────────────────────────────────────────────────────
+// Internal Portuguese keys → English API values consumed by Projeto 3.
+const STATUS_MAP: Record<ConnectionStatus, "connected" | "waiting" | "disconnected"> = {
+  conectado: "connected",
+  aguardando_qr: "waiting",
+  desconectado: "disconnected",
+};
+
+// ── GET /api/admin/qr ─────────────────────────────────────────────────────────
+// Returns the current QR string, connection status, and the Unix timestamp (ms)
+// of the last QR change so Projeto 3 can detect stale renders.
+// Cache-Control: no-store ensures no proxy or browser ever returns a cached response.
+router.get("/admin/qr", (req, res) => {
+  logger.info("Dashboard consultou QR");
+
+  res.setHeader("Cache-Control", "no-store");
+
+  const status = STATUS_MAP[whatsappState.status];
+  const qr = whatsappState.qr;
+  const timestamp = whatsappState.qrTimestamp;
+
+  if (qr) {
+    logger.info({ status, timestamp }, "QR enviado para API");
+  } else {
+    logger.info({ status }, "QR consultado — sem QR ativo no momento");
+  }
+
+  res.json({ status, qr, timestamp });
+});
+
+// ── POST /api/admin/action ────────────────────────────────────────────────────
 router.post("/admin/action", async (req, res) => {
   logger.info("Requisição Admin recebida");
 
