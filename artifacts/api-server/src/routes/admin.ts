@@ -21,11 +21,23 @@ const STATUS_MAP: Record<ConnectionStatus, "connected" | "waiting" | "disconnect
 // ── GET /api/admin/qr ─────────────────────────────────────────────────────────
 // Returns the current QR string, connection status, and the Unix timestamp (ms)
 // of the last QR change so Projeto 3 can detect stale renders.
-// Cache-Control: no-store ensures no proxy or browser ever returns a cached response.
+//
+// All layers of caching are explicitly disabled:
+//   Cache-Control: no-store          — browser must not store the response
+//   Cache-Control: no-cache          — must revalidate with origin before using any stored copy
+//   Cache-Control: must-revalidate   — stale response must never be used
+//   Cache-Control: proxy-revalidate  — same constraint applied to shared caches / CDNs
+//   Pragma: no-cache                 — HTTP/1.0 backward compatibility
+//   Expires: 0                       — signals the response is immediately stale
 router.get("/admin/qr", (req, res) => {
   logger.info("Dashboard consultou QR");
 
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, proxy-revalidate",
+  );
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
 
   const status = STATUS_MAP[whatsappState.status];
   const qr = whatsappState.qr;
