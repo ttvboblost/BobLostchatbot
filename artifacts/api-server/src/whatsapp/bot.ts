@@ -71,7 +71,9 @@ async function clearAuthState(): Promise<void> {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function callWebhook(
+// Exported so the admin route can reuse the exact same webhook call flow
+// without duplicating any logic.
+export async function callWebhook(
   userId: string,
   message: string,
 ): Promise<string | null> {
@@ -147,6 +149,10 @@ export async function startWhatsAppBot(): Promise<void> {
 
     sock.ev.on("creds.update", saveCreds);
 
+    // Expose the active socket through shared state so the admin route can
+    // send messages without coupling to the Baileys WASocket type directly.
+    whatsappState.sock = sock;
+
     sock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect, qr } = update;
 
@@ -164,6 +170,7 @@ export async function startWhatsAppBot(): Promise<void> {
       if (connection === "close") {
         whatsappState.status = "desconectado";
         whatsappState.qr = null;
+        whatsappState.sock = null;
 
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
 
