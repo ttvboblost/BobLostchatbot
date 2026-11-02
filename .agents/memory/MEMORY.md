@@ -1,0 +1,1 @@
+- [Baileys runtime interop](baileys-runtime-interop.md) — validate the bundled Node ESM runtime; generated CommonJS exports may fail as named imports.

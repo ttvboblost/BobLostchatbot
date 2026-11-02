@@ -1,10 +1,15 @@
 import { Router, type IRouter } from "express";
 import { HealthCheckResponse } from "@workspace/api-zod";
+import { pool } from "@workspace/db";
 
 const router: IRouter = Router();
 
-router.get("/healthz", (_req, res) => {
-  const data = HealthCheckResponse.parse({ status: "ok" });
+router.get("/healthz", async (_req, res): Promise<void> => {
+  await pool.query("SELECT 1");
+  const data = HealthCheckResponse.parse({
+    success: true,
+    data: { status: "ok" },
+  });
   res.json(data);
 });
 

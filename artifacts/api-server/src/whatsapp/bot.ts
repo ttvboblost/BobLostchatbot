@@ -1,31 +1,38 @@
 import makeWASocketImport, {
-  useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   type WASocket,
 } from "@whiskeysockets/baileys";
-import { Boom } from "@hapi/boom";
-import qrcodeTerminal from "qrcode-terminal";
-import path from "node:path";
-import { rm } from "node:fs/promises";
+import { normalizeMessageContent } from "@whiskeysockets/baileys/lib/Utils/messages.js";
+import { eq } from "drizzle-orm";
+import { authorizedGroupsTable, db } from "@workspace/db";
 import { logger } from "../lib/logger.js";
-import { whatsappState } from "./state.js";
+import { processIncomingCommand } from "../commands/service.js";
+import { observeGroup } from "../groups/service.js";
+import { publishEvent } from "../websocket/hub.js";
+import {
+  deletePersistentAuthState,
+  loadPersistentAuthState,
+  updateWhatsAppSessionStatus,
+} from "./persistent-auth.js";
+import { whatsappState, type ActiveSocket } from "./state.js";
 
-// Handle CJS/ESM interop: externalized CJS module may wrap the function under .default
 const makeWASocket: typeof makeWASocketImport =
   (makeWASocketImport as any).default ?? makeWASocketImport;
 
-const WEBHOOK_URL =
-  "https://boblost-assistente-core.lovable.app/api/public/webhook";
-const WEBHOOK_TIMEOUT_MS = 8000;
-const AUTH_DIR = path.resolve(process.cwd(), ".whatsapp-session");
+const FATAL_DISCONNECT_CODES = new Set<number>([
+  DisconnectReason.loggedOut,
+  DisconnectReason.badSession,
+  DisconnectReason.forbidden,
+]);
+const RECONNECT_DELAYS_MS = [3000, 5000, 10000, 20000, 40000, 60000];
 
-// ─── Fix 2: Cache Baileys version after first successful fetch ────────────────
-// fetchLatestBaileysVersion() makes an HTTP request. If it fails during reconnect
-// (network blip), the catch block fires and schedules a 10s retry that also starts
-// with the same failing network call — an infinite loop that never generates a QR.
-// Caching the version after the first success breaks this dependency.
 let cachedVersion: [number, number, number] | null = null;
+let isStarting = false;
+let shouldReconnect = true;
+let reconnectAttempt = 0;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const observedGroupIds = new Set<string>();
 
 async function getBaileysVersion(): Promise<[number, number, number]> {
   if (cachedVersion) return cachedVersion;
@@ -33,245 +40,277 @@ async function getBaileysVersion(): Promise<[number, number, number]> {
     const { version } = await fetchLatestBaileysVersion();
     cachedVersion = version;
     logger.info({ version }, "Versão do Baileys obtida do servidor");
-    return cachedVersion;
-  } catch (err) {
-    // Fallback to a known-good version so reconnect can proceed without network
-    const fallback: [number, number, number] = [2, 3000, 1023853467];
-    logger.warn({ err, fallback }, "Falha ao buscar versão do Baileys — usando fallback embutido");
-    cachedVersion = fallback;
-    return fallback;
+  } catch (error) {
+    cachedVersion = [2, 3000, 1023853467];
+    logger.warn(
+      { err: error },
+      "Não foi possível consultar a versão do WhatsApp; usando a versão compatível conhecida",
+    );
   }
+  return cachedVersion;
 }
 
-// ─── Fix 3: Guard against concurrent startWhatsAppBot() calls ────────────────
-// Without this, both the connection.update handler and the catch block can schedule
-// a reconnect in the same error window, creating two sockets that race to read and
-// write the same auth state files (useMultiFileAuthState has no file locking).
-let isStarting = false;
-
-// ─── Fix 1: Fatal disconnect codes that invalidate auth state ────────────────
-// These codes mean the credentials on disk are permanently invalid. Re-using them
-// causes an immediate re-rejection with the same code, looping forever without
-// ever reaching the QR generation step. The auth directory must be cleared so the
-// next connection starts with fresh keys and triggers a new QR.
-const FATAL_DISCONNECT_CODES = new Set([
-  DisconnectReason.loggedOut,  // 401 — user removed this device from their phone
-  DisconnectReason.badSession, // 500 — corrupted session state
-  DisconnectReason.forbidden,  // 403 — account banned or session blocked
-]);
-
-async function clearAuthState(): Promise<void> {
-  try {
-    await rm(AUTH_DIR, { recursive: true, force: true });
-    logger.info({ authDir: AUTH_DIR }, "Estado de autenticação limpo — próxima conexão gerará novo QR");
-  } catch (err) {
-    logger.warn({ err }, "Erro ao limpar estado de autenticação");
-  }
+function scheduleReconnect(): void {
+  if (!shouldReconnect || reconnectTimer) return;
+  const delay =
+    RECONNECT_DELAYS_MS[
+      Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)
+    ] ?? 60000;
+  reconnectAttempt += 1;
+  whatsappState.status = "connecting";
+  publishEvent("whatsapp.reconnecting", {
+    attempt: reconnectAttempt,
+    delayMs: delay,
+  });
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    void openWhatsAppConnection();
+  }, delay);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+async function rememberObservedGroup(
+  socket: ActiveSocket,
+  groupId: string,
+): Promise<void> {
+  if (observedGroupIds.has(groupId)) return;
+  const [knownGroup] = await db
+    .select({ groupName: authorizedGroupsTable.groupName })
+    .from(authorizedGroupsTable)
+    .where(eq(authorizedGroupsTable.groupId, groupId))
+    .limit(1);
 
-// Exported so the admin route can reuse the exact same webhook call flow
-// without duplicating any logic.
-export async function callWebhook(
-  userId: string,
-  message: string,
-): Promise<string | null> {
-  const payload = {
-    user_id: userId,
-    message,
-    type: "whatsapp",
-    timestamp: new Date().toISOString(),
-  };
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(
-        () => controller.abort(),
-        WEBHOOK_TIMEOUT_MS,
-      );
-
-      const response = await fetch(WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Webhook retornou status ${response.status}`);
-      }
-
-      const data = (await response.json()) as { reply?: string };
-      logger.info({ attempt }, "Webhook respondeu com sucesso");
-      return data.reply ?? null;
-    } catch (err) {
-      logger.warn({ err, attempt }, `Tentativa ${attempt} do webhook falhou`);
-      if (attempt === 2) {
-        logger.error({ err }, "Webhook falhou após 2 tentativas");
-        return null;
-      }
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-
-  return null;
-}
-
-export async function startWhatsAppBot(): Promise<void> {
-  // ── Fix 3: prevent concurrent starts ──────────────────────────────────────
-  if (isStarting) {
-    logger.warn("startWhatsAppBot já em execução — chamada duplicada ignorada");
+  if (knownGroup?.groupName) {
+    observedGroupIds.add(groupId);
     return;
   }
-  isStarting = true;
 
-  logger.info("Iniciando bot WhatsApp...");
+  let groupName: string | null = null;
+  try {
+    groupName = (await socket.groupMetadata(groupId)).subject?.trim() || null;
+  } catch (error) {
+    logger.debug({ err: error, groupId }, "Metadados do grupo indisponíveis");
+  }
+  await observeGroup(groupId, groupName);
+  observedGroupIds.add(groupId);
+}
+
+async function processMessages(
+  socket: ActiveSocket,
+  messages: Array<{
+    key: {
+      id?: string | null;
+      remoteJid?: string | null;
+      participant?: string | null;
+      fromMe?: boolean | null;
+    };
+    message?: {
+      conversation?: string | null;
+      extendedTextMessage?: { text?: string | null } | null;
+      imageMessage?: { caption?: string | null } | null;
+      videoMessage?: { caption?: string | null } | null;
+    } | null;
+    pushName?: string | null;
+  }>,
+): Promise<void> {
+  for (const message of messages) {
+    if (!message.message || message.key.fromMe) continue;
+    const groupId = message.key.remoteJid;
+    if (!groupId?.endsWith("@g.us")) continue;
+
+    const messageId = message.key.id;
+    if (!messageId || whatsappState.processedIds.has(messageId)) continue;
+    whatsappState.processedIds.add(messageId);
+    if (whatsappState.processedIds.size > 1000) {
+      const oldestIds = Array.from(whatsappState.processedIds).slice(0, 200);
+      for (const id of oldestIds) whatsappState.processedIds.delete(id);
+    }
+
+    const content = normalizeMessageContent(message.message as never);
+    const text =
+      content?.conversation ??
+      content?.extendedTextMessage?.text ??
+      content?.imageMessage?.caption ??
+      content?.videoMessage?.caption ??
+      null;
+    await rememberObservedGroup(socket, groupId);
+    if (!text?.trim()) continue;
+
+    await processIncomingCommand({
+      socket,
+      groupId,
+      senderJid: message.key.participant ?? null,
+      senderName: message.pushName ?? null,
+      text,
+    });
+  }
+}
+
+async function openWhatsAppConnection(): Promise<void> {
+  if (isStarting || whatsappState.status === "connected") return;
+  isStarting = true;
+  whatsappState.status = "connecting";
+  publishEvent("whatsapp.reconnecting", { attempt: reconnectAttempt });
 
   try {
-    // ── Fix 2: use cached version, never block on network during reconnect ──
     const version = await getBaileysVersion();
-    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-
-    logger.info({ version, authDir: AUTH_DIR }, "Sessão carregada, criando socket...");
-
-    const sock: WASocket = makeWASocket({
+    const { state, saveCreds } = await loadPersistentAuthState();
+    if (!shouldReconnect) {
+      isStarting = false;
+      return;
+    }
+    const socket: WASocket = makeWASocket({
       version,
       auth: state,
+      logger: logger.child({ component: "baileys" }, { level: "error" }) as never,
       printQRInTerminal: false,
-      browser: ["WhatsApp Bot", "Chrome", "1.0.0"],
+      browser: ["BobLost WhatsApp Bot", "Chrome", "1.0.0"],
       connectTimeoutMs: 30_000,
       keepAliveIntervalMs: 10_000,
     });
+    const activeSocket = socket as unknown as ActiveSocket;
+    whatsappState.sock = activeSocket;
 
-    sock.ev.on("creds.update", saveCreds);
+    socket.ev.on("creds.update", () => {
+      void saveCreds().catch((error: unknown) => {
+        logger.error({ err: error }, "Falha ao persistir credenciais do WhatsApp");
+        publishEvent("connection.error", { message: "Falha ao salvar a sessão." });
+      });
+    });
 
-    // Expose the active socket through shared state so the admin route can
-    // send messages without coupling to the Baileys WASocket type directly.
-    whatsappState.sock = sock;
-
-    sock.ev.on("connection.update", async (update) => {
+    socket.ev.on("connection.update", (update) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        const isUpdate = whatsappState.qr !== null;
         whatsappState.qr = qr;
         whatsappState.qrTimestamp = Date.now();
-        whatsappState.status = "aguardando_qr";
-        logger.info(
-          isUpdate ? "QR atualizado — novo QR gerado" : "Novo QR gerado — aguardando escaneamento",
-        );
-        logger.info(
-          "══════════════════════════════════════\n" +
-            "  QR Code gerado — escaneie com o WhatsApp  \n" +
-            "══════════════════════════════════════",
-        );
-        qrcodeTerminal.generate(qr, { small: true });
-      }
-
-      if (connection === "close") {
-        whatsappState.status = "desconectado";
-        whatsappState.qr = null;
-        whatsappState.qrTimestamp = null;
-        whatsappState.sock = null;
-        logger.info("QR limpo — conexão encerrada");
-
-        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-
-        logger.warn({ statusCode }, "Conexão com WhatsApp encerrada");
-
-        // ── Fix 1: clear stale auth state for fatal codes ──────────────────
-        // For codes that permanently invalidate the session, delete the auth
-        // directory so the next connection starts clean and generates a QR.
-        // Without this, the bot loops forever re-trying with invalid creds.
-        if (statusCode !== undefined && FATAL_DISCONNECT_CODES.has(statusCode)) {
-          logger.info(
-            { statusCode },
-            "Código fatal detectado — limpando autenticação para gerar novo QR",
-          );
-          await clearAuthState();
-        }
-
-        // Release the guard BEFORE scheduling the reconnect so the timer
-        // callback can acquire it normally when it runs.
-        isStarting = false;
-        logger.info("Reconectando em 3 segundos...");
-        setTimeout(() => startWhatsAppBot(), 3000);
+        whatsappState.status = "waiting_qr";
+        publishEvent("qr.updated", {
+          timestamp: new Date(whatsappState.qrTimestamp).toISOString(),
+        });
+        logger.info("QR do WhatsApp atualizado");
       }
 
       if (connection === "open") {
-        whatsappState.status = "conectado";
+        isStarting = false;
+        reconnectAttempt = 0;
+        whatsappState.status = "connected";
         whatsappState.qr = null;
         whatsappState.qrTimestamp = null;
-        logger.info("QR limpo — conexão estabelecida com sucesso");
-        logger.info("Status alterado: conectado");
-        logger.info("✅ WhatsApp conectado com sucesso!");
+        void updateWhatsAppSessionStatus(true).catch((error: unknown) => {
+          logger.error({ err: error }, "Falha ao atualizar status persistido");
+        });
+        publishEvent("whatsapp.connected");
+        logger.info("WhatsApp conectado");
       }
-    });
 
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
-      if (type !== "notify") return;
+      if (connection === "close") {
+        isStarting = false;
+        whatsappState.status = "disconnected";
+        whatsappState.qr = null;
+        whatsappState.qrTimestamp = null;
+        whatsappState.sock = null;
+        void updateWhatsAppSessionStatus(false).catch((error: unknown) => {
+          logger.error({ err: error }, "Falha ao atualizar status persistido");
+        });
 
-      for (const msg of messages) {
-        if (!msg.message) continue;
-        if (msg.key.fromMe) continue;
-
-        const msgId = msg.key.id;
-        if (!msgId) continue;
-
-        if (whatsappState.processedIds.has(msgId)) {
-          logger.debug({ msgId }, "Mensagem duplicada ignorada");
-          continue;
-        }
-        whatsappState.processedIds.add(msgId);
-
-        if (whatsappState.processedIds.size > 1000) {
-          const toDelete = Array.from(whatsappState.processedIds).slice(0, 200);
-          toDelete.forEach((id) => whatsappState.processedIds.delete(id));
-        }
-
-        const sender = msg.key.remoteJid;
-        if (!sender) continue;
-
-        const text =
-          msg.message.conversation ??
-          msg.message.extendedTextMessage?.text ??
-          null;
-
-        if (!text || text.trim() === "") {
-          logger.debug({ sender }, "Mensagem sem texto ignorada");
-          continue;
-        }
-
-        logger.info({ sender, text }, "Mensagem recebida");
-
-        try {
-          const reply = await callWebhook(sender, text);
-
-          if (reply) {
-            await sock.sendMessage(sender, { text: reply });
-            logger.info({ sender }, "Resposta enviada ao usuário");
-          } else {
-            logger.warn(
-              { sender },
-              "Webhook sem resposta — nenhuma mensagem enviada",
+        const error = lastDisconnect?.error as
+          | (Error & { output?: { statusCode?: number } })
+          | undefined;
+        const statusCode = error?.output?.statusCode;
+        publishEvent("whatsapp.disconnected", { statusCode: statusCode ?? null });
+        if (statusCode !== undefined && FATAL_DISCONNECT_CODES.has(statusCode)) {
+          void deletePersistentAuthState().catch((deleteError: unknown) => {
+            logger.error(
+              { err: deleteError },
+              "Falha ao apagar sessão inválida do WhatsApp",
             );
-          }
-        } catch (err) {
-          logger.error({ err, sender }, "Erro ao processar mensagem");
+          });
         }
+        if (error) {
+          publishEvent("connection.error", {
+            statusCode: statusCode ?? null,
+            message: "A conexão com o WhatsApp foi encerrada.",
+          });
+          logger.warn({ statusCode }, "Conexão com o WhatsApp encerrada");
+        }
+        scheduleReconnect();
       }
     });
-  } catch (err) {
-    logger.error(
-      { err },
-      "Erro crítico ao iniciar bot WhatsApp — tentando novamente em 10s",
-    );
-    // Release guard so the retry can run
+
+    socket.ev.on("messages.upsert", ({ messages, type }) => {
+      if (type !== "notify") return;
+      void processMessages(activeSocket, messages).catch((error: unknown) => {
+        logger.error({ err: error }, "Erro ao processar mensagens recebidas");
+        publishEvent("connection.error", {
+          message: "Falha ao processar uma mensagem recebida.",
+        });
+      });
+    });
+  } catch (error) {
     isStarting = false;
-    setTimeout(() => startWhatsAppBot(), 10_000);
+    whatsappState.sock = null;
+    whatsappState.status = "disconnected";
+    logger.error({ err: error }, "Falha ao iniciar conexão com WhatsApp");
+    publishEvent("connection.error", {
+      message: "Não foi possível iniciar a conexão com o WhatsApp.",
+    });
+    scheduleReconnect();
   }
+}
+
+export async function startWhatsAppBot(): Promise<void> {
+  shouldReconnect = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  await openWhatsAppConnection();
+}
+
+export async function disconnectWhatsApp(): Promise<void> {
+  shouldReconnect = false;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  const socket = whatsappState.sock;
+  const wasConnected = whatsappState.status === "connected";
+  whatsappState.sock = null;
+  whatsappState.qr = null;
+  whatsappState.qrTimestamp = null;
+  whatsappState.status = "disconnected";
+  isStarting = false;
+
+  let persistenceError: unknown;
+  try {
+    await deletePersistentAuthState();
+  } catch (error) {
+    persistenceError = error;
+    logger.error({ err: error }, "Falha ao remover a sessão persistida do WhatsApp");
+  }
+  try {
+    if (socket && wasConnected) {
+      await socket.logout();
+    } else {
+      socket?.end(new Error("Conexão encerrada pelo administrador."));
+    }
+  } catch (error) {
+    logger.warn({ err: error }, "Falha ao encerrar socket do WhatsApp");
+  }
+
+  publishEvent("whatsapp.disconnected", { manual: true });
+  logger.info("WhatsApp desconectado pelo administrador");
+  if (persistenceError) throw persistenceError;
+}
+
+export function stopWhatsAppForShutdown(): void {
+  shouldReconnect = false;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  const socket = whatsappState.sock;
+  whatsappState.sock = null;
+  socket?.end(new Error("Servidor sendo encerrado."));
 }

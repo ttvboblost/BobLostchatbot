@@ -1,72 +1,60 @@
-# WhatsApp Bot (Baileys)
+# BobLost WhatsApp Bot
 
-A WhatsApp bot that connects via QR Code, forwards messages to an external webhook (Lovable Project 1), and exposes a status/QR API for an external dashboard (Lovable Project 3).
+Backend for one WhatsApp account, dynamic group commands, protected administration
+endpoints, and real-time WebSocket events. Replies are limited to the originating
+authorized group; private chats and bot-authored messages are ignored.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server + WhatsApp bot (port 5000 in dev, assigned by workflow)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm --filter @workspace/api-server run dev` — start API and WhatsApp bot
+- `pnpm run typecheck` — check all workspace packages
+- `pnpm --filter @workspace/api-server run test` — unit and database integration tests
+- `pnpm --filter @workspace/api-spec run codegen` — regenerate API clients and Zod schemas
+- `pnpm --filter @workspace/db run push` — apply schema to configured PostgreSQL
+
+## Required Secrets
+
+- `SUPABASE_DB_URL` — Supabase PostgreSQL URL, with SSL
+- `ADMIN_TOKEN` — administrative bearer token (minimum 32 characters)
+- `SESSION_SECRET` — stable encryption secret (minimum 32 characters)
+
+Optional: `ADMIN_CORS_ORIGINS`, a comma-separated allowlist for the future admin
+web app.
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- WhatsApp: @whiskeysockets/baileys 6.7.0 (installed via direct npm registry, bypasses package firewall)
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Node.js 24, TypeScript, Express 5
+- Baileys 6.7 for one WhatsApp Web account
+- Supabase PostgreSQL with Drizzle ORM
+- Zod request validation, Pino structured logs, `ws` WebSocket server
 
-## Where things live
+## API
 
-- `artifacts/api-server/src/whatsapp/bot.ts` — Baileys connection, QR handling, message forwarding, webhook calls, auto-reconnect
-- `artifacts/api-server/src/whatsapp/state.ts` — Shared mutable state (qr string, connection status, processed message IDs)
-- `artifacts/api-server/src/routes/whatsapp.ts` — `GET /api/qr` and `GET /api/status` endpoints
-- `artifacts/api-server/.whatsapp-session/` — Baileys auth session files (persisted across restarts)
+- `GET /api/healthz` — server and database health
+- `GET /api/status` — safe connection status
+- `GET /api/qr` — protected QR status and SVG
+- `/api/admin/*` — protected WhatsApp, command, group, and log endpoints
+- `GET /api/ws` — real-time events; authenticate with a first message containing
+  `{ "type": "auth", "token": "<ADMIN_TOKEN>" }`
 
-## API Endpoints
+See `artifacts/api-server/README.md` and `lib/api-spec/openapi.yaml` for endpoint,
+database, and setup details.
 
-- `GET /api/qr` → `{ qr: string | null, status: "waiting" | "connected" }`
-- `GET /api/status` → `{ status: "connected" | "disconnected" }`
-- `GET /api/healthz` → `{ status: "ok" }`
+## Security and Session Handling
 
-## Webhook
+- Admin HTTP endpoints use constant-time bearer-token comparison and a
+  per-client request limit.
+- QR data and session credentials are never logged.
+- WhatsApp credentials and keys are encrypted with AES-256-GCM before storage.
+- Supabase RLS is enabled on application tables with no public policies.
+- Do not send messages to a different group or to direct conversations.
 
-Messages are forwarded to:
-```
-POST https://boblost-assistente-core.lovable.app/api/public/webhook
-{ user_id, message, type: "whatsapp", timestamp }
-```
-Response `{ reply: "text" }` is sent back to the WhatsApp sender.
+## Project Layout
 
-## Architecture decisions
-
-- Baileys is externalized in esbuild (not bundled) because it uses dynamic requires and CJS patterns incompatible with bundling
-- `makeWASocket` import uses a `.default ??` fallback to handle CJS/ESM interop when externalized
-- WhatsApp session is stored at `.whatsapp-session/` (relative to CWD) for persistence across Replit restarts
-- Webhook calls have an 8s timeout and 1 automatic retry on failure
-- Processed message IDs are tracked in a Set (capped at 1000) to prevent duplicate handling
-
-## Product
-
-- WhatsApp bot receives messages, forwards to external AI webhook, replies back
-- External dashboard can poll `/api/qr` to display the QR for scanning and `/api/status` to monitor connection
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-- `@whiskeysockets/baileys` is blocked by Replit's package firewall — must be installed with `--registry https://registry.npmjs.org/`
-- `protobufjs` (transitive dep) also blocked by firewall — same `--registry` flag resolves it
-- `protobufjs` must be in `onlyBuiltDependencies` in `pnpm-workspace.yaml` to run its build scripts
-- Do NOT run `pnpm install` without `--registry https://registry.npmjs.org/` if Baileys is missing — it will fail
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- `artifacts/api-server/src/whatsapp` — Baileys connection and encrypted auth state
+- `artifacts/api-server/src/commands` — command parsing, execution, and tests
+- `artifacts/api-server/src/groups` — group discovery and authorization
+- `artifacts/api-server/src/routes` — REST API
+- `artifacts/api-server/src/websocket` — authenticated event stream
+- `lib/db/src/schema` — PostgreSQL tables and indexes
+- `lib/api-spec/openapi.yaml` — documented API contract

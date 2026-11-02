@@ -2,35 +2,586 @@ openapi: 3.1.0
 info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.1.0
-  description: API specification
+  version: 1.0.0
+  description: |
+    API do BobLost WhatsApp Bot. Endpoints administrativos exigem o token
+    configurado em ADMIN_TOKEN no cabeçalho Authorization: Bearer.
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
-    description: Health operations
+  - name: whatsapp
+  - name: commands
+  - name: groups
+  - name: history
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
-      summary: Health check
-      description: Returns server health status
+      summary: Verifica a saúde da API e do banco
       responses:
         "200":
-          description: Healthy
+          description: API e banco disponíveis
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/HealthStatus"
+                $ref: "#/components/schemas/HealthResponse"
+  /status:
+    get:
+      operationId: getPublicStatus
+      tags: [whatsapp]
+      summary: Consulta o estado básico do WhatsApp
+      responses:
+        "200":
+          description: Estado atual
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicStatusResponse"
+  /qr:
+    get:
+      operationId: getPairingQr
+      tags: [whatsapp]
+      summary: Obtém o QR de vinculação protegido
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Estado atual e QR, se disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QrResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /admin/whatsapp:
+    get:
+      operationId: getWhatsAppStatus
+      tags: [whatsapp]
+      summary: Consulta o estado detalhado da conexão
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Estado da conexão
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminWhatsAppResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /admin/whatsapp/qr:
+    get:
+      operationId: getAdminPairingQr
+      tags: [whatsapp]
+      summary: Obtém o QR e sua representação SVG
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: QR de vinculação protegido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QrResponse"
+  /admin/whatsapp/connect:
+    post:
+      operationId: connectWhatsApp
+      tags: [whatsapp]
+      summary: Inicia ou retoma a conexão com o WhatsApp
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Conexão iniciada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+  /admin/whatsapp/disconnect:
+    post:
+      operationId: disconnectWhatsApp
+      tags: [whatsapp]
+      summary: Desconecta e remove a sessão vinculada
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: WhatsApp desconectado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+  /admin/commands:
+    get:
+      operationId: listCommands
+      tags: [commands]
+      summary: Lista os comandos
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Comandos cadastrados
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandListResponse"
+    post:
+      operationId: createCommand
+      tags: [commands]
+      summary: Cadastra um comando
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommand"
+      responses:
+        "201":
+          description: Comando criado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: Nome já utilizado
+  /admin/commands/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: updateCommand
+      tags: [commands]
+      summary: Edita um comando
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCommand"
+      responses:
+        "200":
+          description: Comando atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteCommand
+      tags: [commands]
+      summary: Exclui um comando
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Comando excluído
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActionResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /admin/commands/{id}/activate:
+    post:
+      operationId: activateCommand
+      tags: [commands]
+      summary: Ativa um comando
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CommandId"
+      responses:
+        "200":
+          description: Comando ativado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResponse"
+  /admin/commands/{id}/deactivate:
+    post:
+      operationId: deactivateCommand
+      tags: [commands]
+      summary: Desativa um comando
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CommandId"
+      responses:
+        "200":
+          description: Comando desativado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResponse"
+  /admin/groups:
+    get:
+      operationId: listGroups
+      tags: [groups]
+      summary: Lista os grupos observados pelo bot
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Grupos conhecidos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupListResponse"
+  /admin/groups/{groupId}/authorize:
+    post:
+      operationId: authorizeGroup
+      tags: [groups]
+      summary: Autoriza respostas no grupo
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "200":
+          description: Grupo autorizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /admin/groups/{groupId}/block:
+    post:
+      operationId: blockGroup
+      tags: [groups]
+      summary: Bloqueia respostas no grupo
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/GroupId"
+      responses:
+        "200":
+          description: Grupo bloqueado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupResponse"
+  /admin/command-logs:
+    get:
+      operationId: listCommandLogs
+      tags: [history]
+      summary: Consulta o histórico de comandos
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: groupId
+          in: query
+          schema:
+            type: string
+        - name: commandName
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: before
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Execuções recentes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandLogListResponse"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: ADMIN_TOKEN
+  parameters:
+    CommandId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    GroupId:
+      name: groupId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9a-zA-Z:_-]{6,128}@g\\.us$"
+  responses:
+    Unauthorized:
+      description: Token administrativo inválido ou ausente
+    BadRequest:
+      description: Entrada inválida
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Registro não encontrado
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
   schemas:
-    HealthStatus:
+    ErrorResponse:
       type: object
       properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+          required: [code, message]
+      required: [success, error]
+    HealthResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+          required: [status]
+      required: [success, data]
+    PublicStatusResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [connecting, waiting_qr, connected, disconnected]
+            connected:
+              type: boolean
+          required: [status, connected]
+      required: [success, data]
+    AdminWhatsAppResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+            connected:
+              type: boolean
+            qrAvailable:
+              type: boolean
+            qrUpdatedAt:
+              type: [string, "null"]
+              format: date-time
+          required: [status, connected, qrAvailable, qrUpdatedAt]
+      required: [success, data]
+    QrResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            status:
+              type: string
+            qr:
+              type: [string, "null"]
+              description: Segredo temporário de pareamento; só retorna em rota protegida.
+            qrSvg:
+              type: [string, "null"]
+            timestamp:
+              type: [string, "null"]
+              format: date-time
+          required: [status, qr, qrSvg, timestamp]
+      required: [success, data]
+    ActionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          additionalProperties: true
+      required: [success, data]
+    CreateCommand:
+      type: object
+      properties:
+        name:
+          type: string
+          pattern: "^!?[a-z0-9][a-z0-9_-]{0,31}$"
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        responseContent:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        isActive:
+          type: boolean
+      required: [name, description, responseContent]
+    UpdateCommand:
+      type: object
+      properties:
+        name:
+          type: string
+          pattern: "^!?[a-z0-9][a-z0-9_-]{0,31}$"
+        description:
+          type: string
+          minLength: 1
+          maxLength: 500
+        responseContent:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        isActive:
+          type: boolean
+      minProperties: 1
+    Command:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        responseContent:
+          type: string
+        isActive:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, description, responseContent, isActive, createdAt, updatedAt]
+    CommandResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Command"
+      required: [success, data]
+    CommandListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Command"
+      required: [success, data]
+    Group:
+      type: object
+      properties:
+        groupId:
+          type: string
+        groupName:
+          type: [string, "null"]
+        isAuthorized:
+          type: boolean
+        firstSeenAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [groupId, groupName, isAuthorized, firstSeenAt, updatedAt]
+    GroupResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: "#/components/schemas/Group"
+      required: [success, data]
+    GroupListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Group"
+      required: [success, data]
+    CommandLog:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        commandId:
+          type: [string, "null"]
+        commandName:
+          type: string
+        groupId:
+          type: string
+        senderJid:
+          type: [string, "null"]
         status:
           type: string
-      required:
-        - status
-
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, commandId, commandName, groupId, senderJid, status, createdAt]
+    CommandLogListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/CommandLog"
+      required: [success, data]

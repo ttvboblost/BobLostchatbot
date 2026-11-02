@@ -1,145 +1,73 @@
 import { Router, type IRouter } from "express";
-import { whatsappState, type ConnectionStatus } from "../whatsapp/state.js";
-import { callWebhook } from "../whatsapp/bot.js";
-import { logger } from "../lib/logger.js";
+import QRCode from "qrcode";
+import { startWhatsAppBot, disconnectWhatsApp } from "../whatsapp/bot.js";
+import { whatsappState } from "../whatsapp/state.js";
 
 const router: IRouter = Router();
 
-// Actions and commands supported by this endpoint.
-// Extend these sets to support future actions without changing the route logic.
-const SUPPORTED_ACTIONS = new Set(["trigger_command"]);
-const SUPPORTED_COMMANDS = new Set(["status"]);
+router.get("/whatsapp", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    success: true,
+    data: {
+      status: whatsappState.status,
+      connected: whatsappState.status === "connected",
+      qrAvailable:
+        whatsappState.status === "waiting_qr" && Boolean(whatsappState.qr),
+      qrUpdatedAt: whatsappState.qrTimestamp
+        ? new Date(whatsappState.qrTimestamp).toISOString()
+        : null,
+    },
+  });
+});
 
-// ── Status mapping ────────────────────────────────────────────────────────────
-// Internal Portuguese keys → English API values consumed by Projeto 3.
-const STATUS_MAP: Record<ConnectionStatus, "connected" | "waiting" | "disconnected"> = {
-  conectado: "connected",
-  aguardando_qr: "waiting",
-  desconectado: "disconnected",
-};
-
-// ── GET /api/admin/qr ─────────────────────────────────────────────────────────
-// Returns the current QR string, connection status, and the Unix timestamp (ms)
-// of the last QR change so Projeto 3 can detect stale renders.
-//
-// All layers of caching are explicitly disabled:
-//   Cache-Control: no-store          — browser must not store the response
-//   Cache-Control: no-cache          — must revalidate with origin before using any stored copy
-//   Cache-Control: must-revalidate   — stale response must never be used
-//   Cache-Control: proxy-revalidate  — same constraint applied to shared caches / CDNs
-//   Pragma: no-cache                 — HTTP/1.0 backward compatibility
-//   Expires: 0                       — signals the response is immediately stale
-router.get("/admin/qr", (req, res) => {
-  logger.info("Dashboard consultou QR");
-
-  res.setHeader(
-    "Cache-Control",
-    "no-store, no-cache, must-revalidate, proxy-revalidate",
-  );
+router.get("/whatsapp/qr", async (_req, res): Promise<void> => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
 
-  const status = STATUS_MAP[whatsappState.status];
-  const qr = whatsappState.qr;
-  const timestamp = whatsappState.qrTimestamp;
-
-  if (qr) {
-    logger.info({ status, timestamp }, "QR enviado para API");
-  } else {
-    logger.info({ status }, "QR consultado — sem QR ativo no momento");
+  if (whatsappState.status === "connected") {
+    res.json({
+      success: true,
+      data: { status: "connected", qr: null, qrSvg: null, timestamp: null },
+    });
+    return;
   }
 
-  res.json({ status, qr, timestamp });
+  const qr = whatsappState.qr;
+  const qrSvg = qr
+    ? await QRCode.toString(qr, { type: "svg", margin: 1, errorCorrectionLevel: "M" })
+    : null;
+  res.json({
+    success: true,
+    data: {
+      status: whatsappState.status,
+      qr,
+      qrSvg,
+      timestamp: whatsappState.qrTimestamp
+        ? new Date(whatsappState.qrTimestamp).toISOString()
+        : null,
+    },
+  });
 });
 
-// ── POST /api/admin/action ────────────────────────────────────────────────────
-router.post("/admin/action", async (req, res) => {
-  logger.info("Requisição Admin recebida");
+router.post("/whatsapp/connect", async (_req, res): Promise<void> => {
+  await startWhatsAppBot();
+  res.status(202).json({
+    success: true,
+    data: {
+      status: whatsappState.status,
+      message: "Conexão com o WhatsApp iniciada ou já em andamento.",
+    },
+  });
+});
 
-  try {
-    // ── 1. Authenticate ──────────────────────────────────────────────────────
-    const token = req.headers["x-admin-token"];
-    const expectedToken = process.env["ADMIN_TOKEN"];
-
-    if (!expectedToken || !token || token !== expectedToken) {
-      logger.warn("Requisição Admin recusada — token inválido ou ausente");
-      res.status(401).json({ success: false, message: "Não autorizado." });
-      return;
-    }
-
-    // ── 2. Validate body fields ──────────────────────────────────────────────
-    const body = req.body as Record<string, unknown>;
-    const { action, command, groupId } = body;
-
-    if (typeof action !== "string" || !SUPPORTED_ACTIONS.has(action)) {
-      res
-        .status(400)
-        .json({ success: false, message: "Ação inválida ou não suportada." });
-      return;
-    }
-
-    if (typeof command !== "string" || !SUPPORTED_COMMANDS.has(command)) {
-      res
-        .status(400)
-        .json({ success: false, message: "Comando inválido ou não suportado." });
-      return;
-    }
-
-    if (typeof groupId !== "string" || groupId.trim() === "") {
-      res.status(400).json({ success: false, message: "groupId ausente ou inválido." });
-      return;
-    }
-
-    // ── 3. Enforce TEST_GROUP_ID — never send to any other group ─────────────
-    const testGroupId = process.env["TEST_GROUP_ID"];
-    if (!testGroupId) {
-      logger.error("TEST_GROUP_ID não configurado — requisição Admin bloqueada");
-      res.status(503).json({ success: false, message: "Grupo de teste não configurado." });
-      return;
-    }
-
-    if (groupId !== testGroupId) {
-      logger.warn(
-        { groupId },
-        "Requisição Admin recusada — groupId não corresponde ao grupo de teste",
-      );
-      res
-        .status(403)
-        .json({ success: false, message: "groupId não autorizado." });
-      return;
-    }
-
-    // ── 4. Ensure the bot is ready ───────────────────────────────────────────
-    if (whatsappState.status !== "conectado") {
-      res
-        .status(503)
-        .json({ success: false, message: "Bot desconectado. Aguarde a reconexão." });
-      return;
-    }
-
-    const sock = whatsappState.sock;
-    if (!sock) {
-      res
-        .status(503)
-        .json({ success: false, message: "Socket WhatsApp indisponível." });
-      return;
-    }
-
-    // ── 5. Execute via the exact same flow as an incoming message ────────────
-    // Calls callWebhook() with "!<command>" exactly as the messages.upsert
-    // handler does — no code duplication, no second implementation.
-    const reply = await callWebhook(groupId, `!${command}`);
-
-    if (reply) {
-      await sock.sendMessage(groupId, { text: reply });
-    }
-
-    logger.info({ command }, `Comando interno executado: ${command}`);
-    res.json({ success: true, message: "Comando executado." });
-  } catch (err) {
-    logger.error({ err }, "Erro ao processar requisição Admin");
-    res.status(500).json({ success: false, message: "Erro interno do servidor." });
-  }
+router.post("/whatsapp/disconnect", async (_req, res): Promise<void> => {
+  await disconnectWhatsApp();
+  res.json({
+    success: true,
+    data: { status: "disconnected", message: "WhatsApp desconectado." },
+  });
 });
 
 export default router;
