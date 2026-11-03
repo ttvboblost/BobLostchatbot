@@ -1,12 +1,10 @@
 import { defineConfig } from "drizzle-kit";
 import path from "path";
 
-const databaseUrl = process.env.SUPABASE_DB_URL ?? process.env.DATABASE_URL;
+const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
-  throw new Error(
-    "SUPABASE_DB_URL or DATABASE_URL must be configured for database access.",
-  );
+  throw new Error("DATABASE_URL must be configured for database access.");
 }
 
 export default defineConfig({

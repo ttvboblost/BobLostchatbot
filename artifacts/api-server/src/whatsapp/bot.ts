@@ -26,13 +26,22 @@ const FATAL_DISCONNECT_CODES = new Set<number>([
   DisconnectReason.forbidden,
 ]);
 const RECONNECT_DELAYS_MS = [3000, 5000, 10000, 20000, 40000, 60000];
+const QR_TTL_MS = 55_000;
 
 let cachedVersion: [number, number, number] | null = null;
 let isStarting = false;
 let shouldReconnect = true;
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let qrExpiryTimer: ReturnType<typeof setTimeout> | null = null;
+let connectionGeneration = 0;
 const observedGroupIds = new Set<string>();
+
+function clearQrExpiryTimer(): void {
+  if (!qrExpiryTimer) return;
+  clearTimeout(qrExpiryTimer);
+  qrExpiryTimer = null;
+}
 
 async function getBaileysVersion(): Promise<[number, number, number]> {
   if (cachedVersion) return cachedVersion;
@@ -50,14 +59,14 @@ async function getBaileysVersion(): Promise<[number, number, number]> {
   return cachedVersion;
 }
 
-function scheduleReconnect(): void {
+function scheduleReconnect(status: "connecting" | "error" = "connecting"): void {
   if (!shouldReconnect || reconnectTimer) return;
   const delay =
     RECONNECT_DELAYS_MS[
       Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)
     ] ?? 60000;
   reconnectAttempt += 1;
-  whatsappState.status = "connecting";
+  whatsappState.status = status;
   publishEvent("whatsapp.reconnecting", {
     attempt: reconnectAttempt,
     delayMs: delay,
@@ -146,15 +155,23 @@ async function processMessages(
 }
 
 async function openWhatsAppConnection(): Promise<void> {
-  if (isStarting || whatsappState.status === "connected") return;
+  if (
+    isStarting ||
+    whatsappState.sock ||
+    whatsappState.status === "connected"
+  ) {
+    return;
+  }
   isStarting = true;
   whatsappState.status = "connecting";
+  whatsappState.lastError = null;
+  const generation = ++connectionGeneration;
   publishEvent("whatsapp.reconnecting", { attempt: reconnectAttempt });
 
   try {
     const version = await getBaileysVersion();
     const { state, saveCreds } = await loadPersistentAuthState();
-    if (!shouldReconnect) {
+    if (!shouldReconnect || generation !== connectionGeneration) {
       isStarting = false;
       return;
     }
@@ -168,6 +185,11 @@ async function openWhatsAppConnection(): Promise<void> {
       keepAliveIntervalMs: 10_000,
     });
     const activeSocket = socket as unknown as ActiveSocket;
+    if (!shouldReconnect || generation !== connectionGeneration) {
+      socket.end(new Error("Conexão substituída por uma ação administrativa."));
+      isStarting = false;
+      return;
+    }
     whatsappState.sock = activeSocket;
 
     socket.ev.on("creds.update", () => {
@@ -178,24 +200,61 @@ async function openWhatsAppConnection(): Promise<void> {
     });
 
     socket.ev.on("connection.update", (update) => {
+      if (
+        generation !== connectionGeneration ||
+        whatsappState.sock !== activeSocket
+      ) {
+        return;
+      }
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
+        clearQrExpiryTimer();
         whatsappState.qr = qr;
         whatsappState.qrTimestamp = Date.now();
+        whatsappState.qrExpiresAt = whatsappState.qrTimestamp + QR_TTL_MS;
+        whatsappState.qrExpired = false;
         whatsappState.status = "waiting_qr";
+        whatsappState.lastError = null;
         publishEvent("qr.updated", {
           timestamp: new Date(whatsappState.qrTimestamp).toISOString(),
+          expiresAt: new Date(whatsappState.qrExpiresAt).toISOString(),
         });
         logger.info("QR do WhatsApp atualizado");
+        const issuedAt = whatsappState.qrTimestamp;
+        qrExpiryTimer = setTimeout(() => {
+          if (
+            generation !== connectionGeneration ||
+            whatsappState.sock !== activeSocket ||
+            whatsappState.qrTimestamp !== issuedAt ||
+            whatsappState.status !== "waiting_qr"
+          ) {
+            return;
+          }
+          qrExpiryTimer = null;
+          whatsappState.qr = null;
+          whatsappState.qrExpiresAt = null;
+          whatsappState.qrExpired = true;
+          whatsappState.status = "connecting";
+          isStarting = false;
+          whatsappState.sock = null;
+          publishEvent("qr.expired", {});
+          logger.info("QR do WhatsApp expirou; solicitando um novo código");
+          activeSocket.end(new Error("QR de vinculação expirado."));
+          scheduleReconnect();
+        }, QR_TTL_MS);
       }
 
       if (connection === "open") {
+        clearQrExpiryTimer();
         isStarting = false;
         reconnectAttempt = 0;
         whatsappState.status = "connected";
         whatsappState.qr = null;
         whatsappState.qrTimestamp = null;
+        whatsappState.qrExpiresAt = null;
+        whatsappState.qrExpired = false;
+        whatsappState.lastError = null;
         void updateWhatsAppSessionStatus(true).catch((error: unknown) => {
           logger.error({ err: error }, "Falha ao atualizar status persistido");
         });
@@ -204,10 +263,12 @@ async function openWhatsAppConnection(): Promise<void> {
       }
 
       if (connection === "close") {
+        clearQrExpiryTimer();
         isStarting = false;
         whatsappState.status = "disconnected";
         whatsappState.qr = null;
         whatsappState.qrTimestamp = null;
+        whatsappState.qrExpiresAt = null;
         whatsappState.sock = null;
         void updateWhatsAppSessionStatus(false).catch((error: unknown) => {
           logger.error({ err: error }, "Falha ao atualizar status persistido");
@@ -219,25 +280,41 @@ async function openWhatsAppConnection(): Promise<void> {
         const statusCode = error?.output?.statusCode;
         publishEvent("whatsapp.disconnected", { statusCode: statusCode ?? null });
         if (statusCode !== undefined && FATAL_DISCONNECT_CODES.has(statusCode)) {
-          void deletePersistentAuthState().catch((deleteError: unknown) => {
-            logger.error(
-              { err: deleteError },
-              "Falha ao apagar sessão inválida do WhatsApp",
-            );
+          shouldReconnect = false;
+          whatsappState.status = "error";
+          whatsappState.lastError =
+            "A sessão do WhatsApp precisa ser desvinculada manualmente antes de um novo pareamento.";
+          publishEvent("connection.error", {
+            statusCode,
+            message: whatsappState.lastError,
           });
+          logger.warn(
+            { statusCode },
+            "Sessão do WhatsApp exige ação administrativa explícita",
+          );
+          return;
         }
         if (error) {
+          whatsappState.lastError = "A conexão com o WhatsApp foi interrompida.";
           publishEvent("connection.error", {
             statusCode: statusCode ?? null,
-            message: "A conexão com o WhatsApp foi encerrada.",
+            message: whatsappState.lastError,
           });
           logger.warn({ statusCode }, "Conexão com o WhatsApp encerrada");
+        } else {
+          whatsappState.lastError = null;
         }
         scheduleReconnect();
       }
     });
 
     socket.ev.on("messages.upsert", ({ messages, type }) => {
+      if (
+        generation !== connectionGeneration ||
+        whatsappState.sock !== activeSocket
+      ) {
+        return;
+      }
       if (type !== "notify") return;
       void processMessages(activeSocket, messages).catch((error: unknown) => {
         logger.error({ err: error }, "Erro ao processar mensagens recebidas");
@@ -247,14 +324,20 @@ async function openWhatsAppConnection(): Promise<void> {
       });
     });
   } catch (error) {
+    if (generation !== connectionGeneration) return;
     isStarting = false;
     whatsappState.sock = null;
-    whatsappState.status = "disconnected";
-    logger.error({ err: error }, "Falha ao iniciar conexão com WhatsApp");
+    whatsappState.status = "error";
+    whatsappState.lastError = "Não foi possível iniciar a conexão com o WhatsApp.";
+    const errorName =
+      typeof error === "object" && error !== null && "name" in error
+        ? String(error.name)
+        : "UnknownError";
+    logger.error({ errorName }, "Falha ao iniciar conexão com WhatsApp");
     publishEvent("connection.error", {
-      message: "Não foi possível iniciar a conexão com o WhatsApp.",
+      message: whatsappState.lastError,
     });
-    scheduleReconnect();
+    scheduleReconnect("error");
   }
 }
 
@@ -274,43 +357,116 @@ export async function disconnectWhatsApp(): Promise<void> {
     reconnectTimer = null;
   }
 
+  connectionGeneration += 1;
+  clearQrExpiryTimer();
   const socket = whatsappState.sock;
-  const wasConnected = whatsappState.status === "connected";
   whatsappState.sock = null;
   whatsappState.qr = null;
   whatsappState.qrTimestamp = null;
+  whatsappState.qrExpiresAt = null;
+  whatsappState.qrExpired = false;
+  whatsappState.lastError = null;
   whatsappState.status = "disconnected";
   isStarting = false;
 
-  let persistenceError: unknown;
   try {
-    await deletePersistentAuthState();
+    await updateWhatsAppSessionStatus(false);
   } catch (error) {
-    persistenceError = error;
-    logger.error({ err: error }, "Falha ao remover a sessão persistida do WhatsApp");
+    logger.error({ err: error }, "Falha ao atualizar status persistido do WhatsApp");
   }
   try {
-    if (socket && wasConnected) {
-      await socket.logout();
-    } else {
-      socket?.end(new Error("Conexão encerrada pelo administrador."));
-    }
+    socket?.end(new Error("Conexão encerrada pelo administrador."));
   } catch (error) {
-    logger.warn({ err: error }, "Falha ao encerrar socket do WhatsApp");
+    logger.warn({ errorName: error instanceof Error ? error.name : "UnknownError" }, "Falha ao encerrar socket do WhatsApp");
   }
 
   publishEvent("whatsapp.disconnected", { manual: true });
-  logger.info("WhatsApp desconectado pelo administrador");
-  if (persistenceError) throw persistenceError;
+  logger.info("WhatsApp desconectado pelo administrador; sessão preservada");
 }
 
-export function stopWhatsAppForShutdown(): void {
+export async function restartWhatsApp(): Promise<void> {
   shouldReconnect = false;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+
+  connectionGeneration += 1;
+  clearQrExpiryTimer();
   const socket = whatsappState.sock;
   whatsappState.sock = null;
+  whatsappState.qr = null;
+  whatsappState.qrTimestamp = null;
+  whatsappState.qrExpiresAt = null;
+  whatsappState.qrExpired = false;
+  whatsappState.lastError = null;
+  whatsappState.status = "connecting";
+  isStarting = false;
+  try {
+    await updateWhatsAppSessionStatus(false);
+  } catch (error) {
+    logger.error({ err: error }, "Falha ao atualizar status antes da reinicialização");
+  }
+  socket?.end(new Error("Conexão reiniciada pelo administrador."));
+  publishEvent("whatsapp.restarting", { manual: true });
+  shouldReconnect = true;
+  await openWhatsAppConnection();
+}
+
+export async function unlinkWhatsApp(): Promise<void> {
+  shouldReconnect = false;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  connectionGeneration += 1;
+  clearQrExpiryTimer();
+  const socket = whatsappState.sock;
+  const wasConnected = whatsappState.status === "connected";
+  whatsappState.sock = null;
+  whatsappState.qr = null;
+  whatsappState.qrTimestamp = null;
+  whatsappState.qrExpiresAt = null;
+  whatsappState.qrExpired = false;
+  whatsappState.lastError = null;
+  whatsappState.status = "disconnected";
+  isStarting = false;
+
+  try {
+    if (socket && wasConnected) {
+      await socket.logout();
+    } else {
+      socket?.end(new Error("Sessão removida pelo administrador."));
+    }
+  } catch (error) {
+    logger.warn(
+      { errorName: error instanceof Error ? error.name : "UnknownError" },
+      "Falha ao encerrar socket durante desvinculação explícita",
+    );
+  }
+  await deletePersistentAuthState();
+  publishEvent("whatsapp.disconnected", { manual: true, sessionDeleted: true });
+  logger.info("Sessão do WhatsApp removida por ação administrativa explícita");
+}
+
+export function stopWhatsAppForShutdown(): void {
+  shouldReconnect = false;
+  connectionGeneration += 1;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  clearQrExpiryTimer();
+  const socket = whatsappState.sock;
+  whatsappState.sock = null;
+  whatsappState.qr = null;
+  whatsappState.qrTimestamp = null;
+  whatsappState.qrExpiresAt = null;
+  whatsappState.qrExpired = false;
+  isStarting = false;
   socket?.end(new Error("Servidor sendo encerrado."));
+  void updateWhatsAppSessionStatus(false).catch((error: unknown) => {
+    logger.warn({ err: error }, "Falha ao atualizar o status no encerramento");
+  });
 }

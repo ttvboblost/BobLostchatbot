@@ -2,7 +2,8 @@ export type ConnectionStatus =
   | "connecting"
   | "waiting_qr"
   | "connected"
-  | "disconnected";
+  | "disconnected"
+  | "error";
 
 export interface ActiveSocket {
   sendMessage(jid: string, content: { text: string }): Promise<unknown>;
@@ -14,6 +15,9 @@ export interface ActiveSocket {
 interface WhatsAppState {
   qr: string | null;
   qrTimestamp: number | null;
+  qrExpiresAt: number | null;
+  qrExpired: boolean;
+  lastError: string | null;
   status: ConnectionStatus;
   processedIds: Set<string>;
   sock: ActiveSocket | null;
@@ -22,6 +26,9 @@ interface WhatsAppState {
 export const whatsappState: WhatsAppState = {
   qr: null,
   qrTimestamp: null,
+  qrExpiresAt: null,
+  qrExpired: false,
+  lastError: null,
   status: "disconnected",
   processedIds: new Set(),
   sock: null,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 
-const canRunDatabaseTest = Boolean(process.env["SUPABASE_DB_URL"]);
+const canRunDatabaseTest = Boolean(process.env["DATABASE_URL"]);
 let closeDatabase: (() => Promise<void>) | undefined;
 
 test(
@@ -43,7 +43,7 @@ test(
       await db.insert(commandsTable).values({
         name,
         description: "temporary integration test",
-        responseContent: "Olá {nome} em {grupo}",
+        responseContent: "Olá {nome} em {grupo} ({data} {hora})",
         isActive: false,
       });
 
@@ -69,7 +69,10 @@ test(
       });
       assert.equal(replies.length, 1);
       assert.equal(replies[0]?.jid, groupId);
-      assert.match(replies[0]?.text ?? "", /Olá Ana em Test group/);
+      assert.match(
+        replies[0]?.text ?? "",
+        /Olá Ana em Test group \(\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}\)/,
+      );
 
       await processIncomingCommand({
         socket,

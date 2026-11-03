@@ -22,7 +22,14 @@ router.get("/qr", adminRateLimit, requireAdmin, async (_req, res): Promise<void>
   if (whatsappState.status === "connected") {
     res.json({
       success: true,
-      data: { status: "connected", qr: null, qrSvg: null, timestamp: null },
+      data: {
+        status: "connected",
+        qr: null,
+        qrSvg: null,
+        timestamp: null,
+        expiresAt: null,
+        expired: false,
+      },
     });
     return;
   }
@@ -44,6 +51,10 @@ router.get("/qr", adminRateLimit, requireAdmin, async (_req, res): Promise<void>
       timestamp: whatsappState.qrTimestamp
         ? new Date(whatsappState.qrTimestamp).toISOString()
         : null,
+      expiresAt: whatsappState.qrExpiresAt
+        ? new Date(whatsappState.qrExpiresAt).toISOString()
+        : null,
+      expired: whatsappState.qrExpired,
     },
   });
 });

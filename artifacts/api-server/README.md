@@ -1,6 +1,6 @@
 # BobLost WhatsApp Bot — Backend
 
-Backend em Node.js, TypeScript, Express, Baileys e PostgreSQL do Supabase. Ele
+Backend em Node.js, TypeScript, Express, Baileys e PostgreSQL gerenciado do Replit. Ele
 responde apenas a comandos ativos enviados em grupos autorizados. Conversas
 privadas, grupos não autorizados e mensagens do próprio bot nunca recebem
 respostas.
@@ -11,7 +11,7 @@ Configure estes valores em **Replit Secrets**:
 
 | Nome | Uso |
 | --- | --- |
-| `SUPABASE_DB_URL` | URL PostgreSQL do Supabase, com TLS habilitado. Prefira a URL do Session Pooler se a rede do ambiente não aceitar IPv6. |
+| `DATABASE_URL` | Conexão PostgreSQL gerenciada e fornecida pelo Replit. |
 | `ADMIN_TOKEN` | Token aleatório forte, com pelo menos 32 caracteres. Autoriza todas as rotas administrativas e o WebSocket. |
 | `SESSION_SECRET` | Chave estável com pelo menos 32 caracteres. Deriva a chave AES-256-GCM usada para criptografar a sessão e as chaves do Baileys no banco. |
 
@@ -24,21 +24,21 @@ vírgulas de origens confiáveis do painel futuro, por exemplo
 `https://painel.exemplo.com`. Sem essa configuração, chamadas sem navegador
 continuam funcionando, mas origens de navegador não recebem permissão CORS.
 
-O backend usa acesso PostgreSQL direto ao Supabase. As tabelas têm RLS habilitado
+O backend usa somente `DATABASE_URL`. As tabelas têm RLS habilitado
 sem políticas públicas; somente o servidor, conectado com a credencial do banco,
-tem acesso. Nunca envie `SUPABASE_DB_URL`, `ADMIN_TOKEN` ou `SESSION_SECRET` ao
+tem acesso. Nunca envie `DATABASE_URL`, `ADMIN_TOKEN` ou `SESSION_SECRET` ao
 cliente web.
 
 ## Banco de dados
 
-Depois de configurar `SUPABASE_DB_URL`, aplique o schema:
+Com `DATABASE_URL` disponível no Replit, aplique o schema:
 
 ```sh
 pnpm --filter @workspace/db run push
 ```
 
 O schema cria `bot_settings`, `whatsapp_sessions`, `whatsapp_auth_keys`,
-`commands`, `authorized_groups` e `command_logs`, com índices, chaves
+`commands`, `authorized_groups`, `command_logs` e `admin_audit_logs`, com índices, chaves
 estrangeiras e RLS habilitado. As credenciais e chaves de autenticação do
 WhatsApp são criptografadas com AES-256-GCM antes de serem gravadas.
 
@@ -52,21 +52,22 @@ pnpm run typecheck
 pnpm --filter @workspace/api-server run test
 ```
 
-O teste de integração do banco é executado quando `SUPABASE_DB_URL` está
+O teste de integração do banco é executado quando `DATABASE_URL` está
 disponível; ele cria e remove registros temporários ao verificar a persistência,
 os comandos inativos e o isolamento do grupo de resposta.
 
 ## Parear o WhatsApp
 
 1. Inicie o workflow **API Server**. A conexão Baileys começa automaticamente.
-2. Consulte `GET /api/qr` com `Authorization: Bearer <ADMIN_TOKEN>`.
+2. Inicie uma sessão em `POST /api/admin/session/login` com o token
+   administrativo. O servidor retorna um cookie HttpOnly assinado.
 3. Quando `data.qrSvg` estiver disponível, abra **Aparelhos conectados** no
    WhatsApp e leia o QR.
 4. Consulte `GET /api/status` para o estado público básico ou
    `GET /api/admin/whatsapp` para os detalhes administrativos.
-5. Use `POST /api/admin/whatsapp/disconnect` para sair e remover a sessão
-   persistida. Para vincular novamente, use
-   `POST /api/admin/whatsapp/connect` e leia o novo QR.
+5. `POST /api/admin/whatsapp/disconnect` preserva a sessão para reconexão.
+   Use `/restart` para reiniciar a conexão sem apagar credenciais. Somente
+   `POST /api/admin/whatsapp/unlink` apaga explicitamente a sessão persistida.
 
 O QR é temporário, nunca é registrado nos logs e só é retornado em endpoint
 protegido.
@@ -102,18 +103,25 @@ espontâneo.
 
 ## API administrativa
 
-Todas as rotas abaixo exigem `Authorization: Bearer <ADMIN_TOKEN>`. As respostas
+As rotas administrativas aceitam o cookie de sessão HttpOnly do painel ou
+`Authorization: Bearer <ADMIN_TOKEN>` para clientes de serviço. As respostas
 usam `{ "success": true, "data": ... }`; erros usam `{ "success": false,
 "error": { "code": ..., "message": ... } }`.
 
 | Método | Rota | Ação |
 | --- | --- | --- |
+| `POST` | `/api/admin/session/login` | Inicia sessão segura do painel |
+| `GET` | `/api/admin/session` | Confirma sessão atual |
+| `POST` | `/api/admin/session/logout` | Encerra sessão |
+| `GET` | `/api/admin/overview` | Resumo do bot, comandos e grupos |
 | `GET` | `/api/status` | Estado público sem QR |
 | `GET` | `/api/qr` | QR protegido e SVG |
 | `GET` | `/api/admin/whatsapp` | Estado detalhado |
 | `GET` | `/api/admin/whatsapp/qr` | QR protegido e SVG |
 | `POST` | `/api/admin/whatsapp/connect` | Inicia/reinicia a conexão |
-| `POST` | `/api/admin/whatsapp/disconnect` | Desconecta e remove a sessão |
+| `POST` | `/api/admin/whatsapp/disconnect` | Desconecta e preserva a sessão |
+| `POST` | `/api/admin/whatsapp/restart` | Reinicia sem apagar a sessão |
+| `POST` | `/api/admin/whatsapp/unlink` | Apaga a sessão por ação explícita |
 | `GET`, `POST` | `/api/admin/commands` | Lista/cria comandos |
 | `PATCH`, `DELETE` | `/api/admin/commands/{id}` | Edita/exclui comando |
 | `POST` | `/api/admin/commands/{id}/activate` | Ativa comando |

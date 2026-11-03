@@ -2,6 +2,7 @@ import { Router, type IRouter, type Response } from "express";
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod/v4";
 import { authorizedGroupsTable, db } from "@workspace/db";
+import { recordAdminAudit } from "../lib/admin-audit.js";
 
 const router: IRouter = Router();
 const groupParamsSchema = z.object({
@@ -50,6 +51,12 @@ async function setGroupAuthorization(
     });
     return;
   }
+  await recordAdminAudit({
+    action: isAuthorized ? "group.authorize" : "group.block",
+    resourceType: "group",
+    resourceId: group.groupId,
+    metadata: { isAuthorized: group.isAuthorized },
+  });
   res.json({ success: true, data: group });
 }
 

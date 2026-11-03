@@ -6,8 +6,8 @@ import { startWhatsAppBot, stopWhatsAppForShutdown } from "./whatsapp/bot.js";
 import { upsertBotSettings } from "./commands/service.js";
 import { pool } from "@workspace/db";
 
-if (!process.env["SUPABASE_DB_URL"]) {
-  throw new Error("SUPABASE_DB_URL is required to use the configured Supabase database.");
+if (!process.env["DATABASE_URL"]) {
+  throw new Error("DATABASE_URL is required to use the managed PostgreSQL database.");
 }
 if (!process.env["ADMIN_TOKEN"] || process.env["ADMIN_TOKEN"].length < 32) {
   throw new Error("ADMIN_TOKEN must be configured with at least 32 characters.");

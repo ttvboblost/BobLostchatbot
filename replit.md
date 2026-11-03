@@ -1,8 +1,9 @@
 # BobLost WhatsApp Bot
 
-Backend for one WhatsApp account, dynamic group commands, protected administration
-endpoints, and real-time WebSocket events. Replies are limited to the originating
-authorized group; private chats and bot-authored messages are ignored.
+Backend and responsive admin panel for one WhatsApp account, dynamic group
+commands, protected administration endpoints, and real-time events. Replies are
+limited to the originating authorized group; private chats and bot-authored
+messages are ignored.
 
 ## Run & Operate
 
@@ -14,18 +15,18 @@ authorized group; private chats and bot-authored messages are ignored.
 
 ## Required Secrets
 
-- `SUPABASE_DB_URL` — Supabase PostgreSQL URL, with SSL
+- `DATABASE_URL` — Replit-managed PostgreSQL connection
 - `ADMIN_TOKEN` — administrative bearer token (minimum 32 characters)
 - `SESSION_SECRET` — stable encryption secret (minimum 32 characters)
 
-Optional: `ADMIN_CORS_ORIGINS`, a comma-separated allowlist for the future admin
-web app.
+Optional: `ADMIN_CORS_ORIGINS`, a comma-separated allowlist for trusted web
+origins.
 
 ## Stack
 
 - Node.js 24, TypeScript, Express 5
 - Baileys 6.7 for one WhatsApp Web account
-- Supabase PostgreSQL with Drizzle ORM
+- Replit-managed PostgreSQL with Drizzle ORM
 - Zod request validation, Pino structured logs, `ws` WebSocket server
 
 ## API
@@ -34,6 +35,7 @@ web app.
 - `GET /api/status` — safe connection status
 - `GET /api/qr` — protected QR status and SVG
 - `/api/admin/*` — protected WhatsApp, command, group, and log endpoints
+- `/api/admin/session/*` — signed HttpOnly admin browser session
 - `GET /api/ws` — real-time events; authenticate with a first message containing
   `{ "type": "auth", "token": "<ADMIN_TOKEN>" }`
 
@@ -42,11 +44,11 @@ database, and setup details.
 
 ## Security and Session Handling
 
-- Admin HTTP endpoints use constant-time bearer-token comparison and a
-  per-client request limit.
+- Admin HTTP endpoints use constant-time bearer-token comparison or a signed,
+  HttpOnly, SameSite cookie session, with per-client request limits.
 - QR data and session credentials are never logged.
 - WhatsApp credentials and keys are encrypted with AES-256-GCM before storage.
-- Supabase RLS is enabled on application tables with no public policies.
+- RLS is enabled on application tables with no public policies.
 - Do not send messages to a different group or to direct conversations.
 
 ## Project Layout

@@ -2,6 +2,7 @@ import { Router, type IRouter, type Response } from "express";
 import { eq } from "drizzle-orm";
 import { z } from "zod/v4";
 import { commandsTable, db } from "@workspace/db";
+import { recordAdminAudit } from "../lib/admin-audit.js";
 
 const router: IRouter = Router();
 
@@ -69,6 +70,12 @@ router.post("/commands", async (req, res): Promise<void> => {
     return;
   }
 
+  await recordAdminAudit({
+    action: "command.create",
+    resourceType: "command",
+    resourceId: command.id,
+    metadata: { name: command.name, isActive: command.isActive },
+  });
   res.status(201).json({ success: true, data: command });
 });
 
@@ -116,6 +123,12 @@ router.patch("/commands/:id", async (req, res): Promise<void> => {
     });
     return;
   }
+  await recordAdminAudit({
+    action: "command.update",
+    resourceType: "command",
+    resourceId: command.id,
+    metadata: { changedFields: Object.keys(parsed.data) },
+  });
   res.json({ success: true, data: command });
 });
 
@@ -149,6 +162,11 @@ router.delete("/commands/:id", async (req, res): Promise<void> => {
     });
     return;
   }
+  await recordAdminAudit({
+    action: "command.delete",
+    resourceType: "command",
+    resourceId: command.id,
+  });
   res.json({ success: true, data: { id: command.id, deleted: true } });
 });
 
@@ -178,6 +196,12 @@ async function setCommandActive(
     });
     return;
   }
+  await recordAdminAudit({
+    action: isActive ? "command.activate" : "command.deactivate",
+    resourceType: "command",
+    resourceId: command.id,
+    metadata: { name: command.name },
+  });
   res.json({ success: true, data: command });
 }
 

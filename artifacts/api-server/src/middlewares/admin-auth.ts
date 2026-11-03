@@ -1,9 +1,13 @@
 import { timingSafeEqual } from "node:crypto";
 import type { RequestHandler } from "express";
+import { hasValidAdminSession } from "./admin-session.js";
 
 const requestCounts = new Map<string, { count: number; resetsAt: number }>();
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_REQUESTS = 120;
+const LOGIN_WINDOW_MS = 60 * 1000;
+const MAX_LOGIN_REQUESTS = 10;
+const loginRequestCounts = new Map<string, { count: number; resetsAt: number }>();
 
 export function isAdminTokenValid(candidate: string): boolean {
   const expected = process.env["ADMIN_TOKEN"];
@@ -45,11 +49,34 @@ export const adminRateLimit: RequestHandler = (req, res, next) => {
   next();
 };
 
+export const adminLoginRateLimit: RequestHandler = (req, res, next) => {
+  const now = Date.now();
+  const key = req.ip ?? "unknown";
+  const current = loginRequestCounts.get(key);
+  if (!current || current.resetsAt <= now) {
+    loginRequestCounts.set(key, { count: 1, resetsAt: now + LOGIN_WINDOW_MS });
+    next();
+    return;
+  }
+  current.count += 1;
+  if (current.count > MAX_LOGIN_REQUESTS) {
+    res.status(429).json({
+      success: false,
+      error: { code: "RATE_LIMITED", message: "Limite de tentativas excedido." },
+    });
+    return;
+  }
+  next();
+};
+
 export const requireAdmin: RequestHandler = (req, res, next) => {
   const authorization = req.header("authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(authorization);
 
-  if (!match || !isAdminTokenValid(match[1] ?? "")) {
+  if (
+    !(match && isAdminTokenValid(match[1] ?? "")) &&
+    !hasValidAdminSession(req)
+  ) {
     res.status(401).json({
       success: false,
       error: { code: "UNAUTHORIZED", message: "Autenticação administrativa necessária." },

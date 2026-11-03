@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "BobLost Admin"
+description = "Painel administrativo responsivo para conectar o WhatsApp, gerenciar comandos e grupos autorizados e acompanhar os registros do BobLost Bot com autenticação segura."
+version = "1.0.0"
+id = "artifacts/boblost-admin"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23898
+
+[services.development]
+run = "pnpm --filter @workspace/boblost-admin run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/boblost-admin", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/boblost-admin/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23898"
+BASE_PATH = "/"
