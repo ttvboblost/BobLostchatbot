@@ -38,9 +38,10 @@ pnpm --filter @workspace/db run push
 ```
 
 O schema cria `bot_settings`, `whatsapp_sessions`, `whatsapp_auth_keys`,
-`commands`, `authorized_groups`, `command_logs` e `admin_audit_logs`, com índices, chaves
-estrangeiras e RLS habilitado. As credenciais e chaves de autenticação do
-WhatsApp são criptografadas com AES-256-GCM antes de serem gravadas.
+`commands`, `authorized_groups`, `command_logs`, `admin_audit_logs`,
+`afk_statuses` e `processed_message_events`, com índices, chaves e RLS
+habilitado. As credenciais e chaves de autenticação do WhatsApp são
+criptografadas com AES-256-GCM antes de serem gravadas.
 
 ## Iniciar
 
@@ -97,9 +98,15 @@ Content-Type: application/json
 ```
 
 O campo `name` pode ser enviado com ou sem `!`. As respostas aceitam `{nome}`,
-`{grupo}`, `{data}` e `{hora}`. `!comandos` lista os comandos ativos quando não
-houver um comando personalizado com esse nome. Não há envio em massa nem envio
-espontâneo.
+`{grupo}`, `{data}` e `{hora}`. `!comandos` e `!menu` listam os comandos ativos
+quando não houver um comando personalizado com o mesmo nome. Não há envio em
+massa nem envio espontâneo.
+
+`!afk [motivo]` é reservado pelo sistema. O estado é salvo por grupo e JID real
+do participante. Menções são lidas de `contextInfo.mentionedJid`; quando o
+próprio participante envia texto, figurinha ou outra mensagem normal no mesmo
+grupo, o estado é removido e o tempo de ausência é informado. Mensagens privadas,
+eventos de sistema e mensagens do próprio bot não alteram o estado.
 
 ## API administrativa
 

@@ -654,6 +654,7 @@ components:
         name:
           type: string
           pattern: "^!?[a-z0-9][a-z0-9_-]{0,31}$"
+          description: Comando `afk` é reservado pelo sistema.
         description:
           type: string
           minLength: 1
@@ -671,6 +672,7 @@ components:
         name:
           type: string
           pattern: "^!?[a-z0-9][a-z0-9_-]{0,31}$"
+          description: Comando `afk` é reservado pelo sistema.
         description:
           type: string
           minLength: 1
@@ -702,6 +704,9 @@ components:
         updatedAt:
           type: string
           format: date-time
+        isNative:
+          type: boolean
+          description: Comando nativo do sistema; não pode ser gerenciado pelo painel.
       required: [id, name, description, responseContent, isActive, createdAt, updatedAt]
     CommandResponse:
       type: object

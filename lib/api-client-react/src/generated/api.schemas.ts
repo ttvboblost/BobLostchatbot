@@ -145,7 +145,10 @@ export interface ActionResponse {
 }
 
 export interface CreateCommand {
-  /** @pattern ^!?[a-z0-9][a-z0-9_-]{0,31}$ */
+  /**
+     * Comando `afk` é reservado pelo sistema.
+     * @pattern ^!?[a-z0-9][a-z0-9_-]{0,31}$
+     */
   name: string;
   /**
      * @minLength 1
@@ -161,7 +164,10 @@ export interface CreateCommand {
 }
 
 export interface UpdateCommand {
-  /** @pattern ^!?[a-z0-9][a-z0-9_-]{0,31}$ */
+  /**
+     * Comando `afk` é reservado pelo sistema.
+     * @pattern ^!?[a-z0-9][a-z0-9_-]{0,31}$
+     */
   name?: string;
   /**
      * @minLength 1

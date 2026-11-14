@@ -1,16 +1,28 @@
 import { Router, type IRouter, type Response } from "express";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod/v4";
 import { commandsTable, db } from "@workspace/db";
 import { recordAdminAudit } from "../lib/admin-audit.js";
 
 const router: IRouter = Router();
+const NATIVE_AFK_ID = "00000000-0000-4000-8000-000000000001";
+const NATIVE_AFK_DESCRIPTION =
+  "Comando nativo: ativa o AFK neste grupo e avisa quando alguém mencionar você.";
+const NATIVE_AFK_RESPONSE =
+  "Use !afk [motivo]. O status é removido quando você envia uma mensagem ou figurinha neste grupo.";
 
 const commandNameSchema = z
   .string()
   .trim()
   .transform((value) => value.replace(/^!/, "").toLowerCase())
-  .pipe(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/));
+  .pipe(
+    z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9_-]{0,31}$/)
+      .refine((value) => value !== "afk", {
+        message: "!afk é um comando reservado do sistema.",
+      }),
+  );
 
 const createCommandSchema = z
   .object({
@@ -36,10 +48,25 @@ const commandIdParamsSchema = z.object({
 });
 
 router.get("/commands", async (_req, res): Promise<void> => {
-  const commands = await db
+  const savedCommands = await db
     .select()
     .from(commandsTable)
+    .where(ne(commandsTable.name, "afk"))
     .orderBy(commandsTable.name);
+  const now = new Date().toISOString();
+  const commands = [
+    ...savedCommands.map((command) => ({ ...command, isNative: false })),
+    {
+      id: NATIVE_AFK_ID,
+      name: "afk",
+      description: NATIVE_AFK_DESCRIPTION,
+      responseContent: NATIVE_AFK_RESPONSE,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+      isNative: true,
+    },
+  ].sort((left, right) => left.name.localeCompare(right.name));
   res.json({ success: true, data: commands });
 });
 
@@ -90,12 +117,34 @@ router.patch("/commands/:id", async (req, res): Promise<void> => {
     return;
   }
 
+  const [current] = await db
+    .select({ name: commandsTable.name })
+    .from(commandsTable)
+    .where(eq(commandsTable.id, params.data.id))
+    .limit(1);
+  if (!current) {
+    res.status(404).json({
+      success: false,
+      error: { code: "COMMAND_NOT_FOUND", message: "Comando não encontrado." },
+    });
+    return;
+  }
+  if (current.name === "afk") {
+    sendNativeCommandError(res);
+    return;
+  }
+
   let command;
   try {
     [command] = await db
       .update(commandsTable)
       .set({ ...parsed.data, updatedAt: new Date() })
-      .where(eq(commandsTable.id, params.data.id))
+      .where(
+        and(
+          eq(commandsTable.id, params.data.id),
+          ne(commandsTable.name, "afk"),
+        ),
+      )
       .returning();
   } catch (error) {
     if (
@@ -150,9 +199,31 @@ router.delete("/commands/:id", async (req, res): Promise<void> => {
     return;
   }
 
+  const [current] = await db
+    .select({ name: commandsTable.name })
+    .from(commandsTable)
+    .where(eq(commandsTable.id, params.data.id))
+    .limit(1);
+  if (!current) {
+    res.status(404).json({
+      success: false,
+      error: { code: "COMMAND_NOT_FOUND", message: "Comando não encontrado." },
+    });
+    return;
+  }
+  if (current.name === "afk") {
+    sendNativeCommandError(res);
+    return;
+  }
+
   const [command] = await db
     .delete(commandsTable)
-    .where(eq(commandsTable.id, params.data.id))
+    .where(
+      and(
+        eq(commandsTable.id, params.data.id),
+        ne(commandsTable.name, "afk"),
+      ),
+    )
     .returning({ id: commandsTable.id });
 
   if (!command) {
@@ -184,10 +255,32 @@ async function setCommandActive(
     return;
   }
 
+  const [current] = await db
+    .select({ name: commandsTable.name })
+    .from(commandsTable)
+    .where(eq(commandsTable.id, params.data.id))
+    .limit(1);
+  if (!current) {
+    res.status(404).json({
+      success: false,
+      error: { code: "COMMAND_NOT_FOUND", message: "Comando não encontrado." },
+    });
+    return;
+  }
+  if (current.name === "afk") {
+    sendNativeCommandError(res);
+    return;
+  }
+
   const [command] = await db
     .update(commandsTable)
     .set({ isActive, updatedAt: new Date() })
-    .where(eq(commandsTable.id, params.data.id))
+    .where(
+      and(
+        eq(commandsTable.id, params.data.id),
+        ne(commandsTable.name, "afk"),
+      ),
+    )
     .returning();
   if (!command) {
     res.status(404).json({
@@ -203,6 +296,16 @@ async function setCommandActive(
     metadata: { name: command.name },
   });
   res.json({ success: true, data: command });
+}
+
+function sendNativeCommandError(res: Response): void {
+  res.status(409).json({
+    success: false,
+    error: {
+      code: "NATIVE_COMMAND",
+      message: "!afk é nativo e não pode ser alterado pelo painel.",
+    },
+  });
 }
 
 export default router;

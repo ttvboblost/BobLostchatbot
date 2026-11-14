@@ -197,7 +197,7 @@ export const createCommandBodyResponseContentMax = 4000;
 
 
 export const CreateCommandBody = zod.object({
-  "name": zod.string().regex(createCommandBodyNameRegExp),
+  "name": zod.string().regex(createCommandBodyNameRegExp).describe('Comando `afk` é reservado pelo sistema.'),
   "description": zod.string().min(1).max(createCommandBodyDescriptionMax),
   "responseContent": zod.string().min(1).max(createCommandBodyResponseContentMax),
   "isActive": zod.boolean().optional()
@@ -219,7 +219,7 @@ export const updateCommandBodyResponseContentMax = 4000;
 
 
 export const UpdateCommandBody = zod.object({
-  "name": zod.string().regex(updateCommandBodyNameRegExp).optional(),
+  "name": zod.string().regex(updateCommandBodyNameRegExp).optional().describe('Comando `afk` é reservado pelo sistema.'),
   "description": zod.string().min(1).max(updateCommandBodyDescriptionMax).optional(),
   "responseContent": zod.string().min(1).max(updateCommandBodyResponseContentMax).optional(),
   "isActive": zod.boolean().optional()

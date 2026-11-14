@@ -9,7 +9,10 @@ iniciar uma sessão protegida por cookie HttpOnly ou autenticação Bearer.
  */
 
 export interface CreateCommand {
-  /** @pattern ^!?[a-z0-9][a-z0-9_-]{0,31}$ */
+  /**
+     * Comando `afk` é reservado pelo sistema.
+     * @pattern ^!?[a-z0-9][a-z0-9_-]{0,31}$
+     */
   name: string;
   /**
      * @minLength 1

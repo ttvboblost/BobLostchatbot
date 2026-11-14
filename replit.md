@@ -1,9 +1,9 @@
 # BobLost WhatsApp Bot
 
 Backend and responsive admin panel for one WhatsApp account, dynamic group
-commands, protected administration endpoints, and real-time events. Replies are
-limited to the originating authorized group; private chats and bot-authored
-messages are ignored.
+commands, AFK status by participant and group, protected administration
+endpoints, and real-time events. Replies are limited to the originating
+authorized group; private chats and bot-authored messages are ignored.
 
 ## Run & Operate
 
@@ -48,6 +48,8 @@ database, and setup details.
   HttpOnly, SameSite cookie session, with per-client request limits.
 - QR data and session credentials are never logged.
 - WhatsApp credentials and keys are encrypted with AES-256-GCM before storage.
+- AFK records are keyed by group and participant JID; message IDs are retained
+  for deduplication across reconnects.
 - RLS is enabled on application tables with no public policies.
 - Do not send messages to a different group or to direct conversations.
 

@@ -27,6 +27,8 @@ const FATAL_DISCONNECT_CODES = new Set<number>([
 ]);
 const RECONNECT_DELAYS_MS = [3000, 5000, 10000, 20000, 40000, 60000];
 const QR_TTL_MS = 55_000;
+const SEND_RETRY_LIMIT = 2;
+const RECONNECT_WAIT_TIMEOUT_MS = 90_000;
 
 let cachedVersion: [number, number, number] | null = null;
 let isStarting = false;
@@ -35,13 +37,159 @@ let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let qrExpiryTimer: ReturnType<typeof setTimeout> | null = null;
 let connectionGeneration = 0;
+let connectedSocketGeneration = 0;
 const observedGroupIds = new Set<string>();
+type ConnectedSocketSnapshot = {
+  socket: ActiveSocket;
+  generation: number;
+};
+type ConnectedSocketWaiter = {
+  afterGeneration: number;
+  resolve: (snapshot: ConnectedSocketSnapshot) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
+const connectedSocketWaiters = new Set<ConnectedSocketWaiter>();
 
 function clearQrExpiryTimer(): void {
   if (!qrExpiryTimer) return;
   clearTimeout(qrExpiryTimer);
   qrExpiryTimer = null;
 }
+
+function safeErrorDetails(error: unknown): {
+  errorName: string;
+  errorCode?: string | number;
+  statusCode?: number;
+} {
+  if (typeof error !== "object" || error === null) {
+    return { errorName: "UnknownError" };
+  }
+  const details: {
+    errorName: string;
+    errorCode?: string | number;
+    statusCode?: number;
+  } = {
+    errorName:
+      "name" in error && typeof error.name === "string"
+        ? error.name
+        : "UnknownError",
+  };
+  if (
+    "code" in error &&
+    (typeof error.code === "string" || typeof error.code === "number")
+  ) {
+    details.errorCode = error.code;
+  }
+  if (
+    "output" in error &&
+    typeof error.output === "object" &&
+    error.output !== null &&
+    "statusCode" in error.output &&
+    typeof error.output.statusCode === "number"
+  ) {
+    details.statusCode = error.output.statusCode;
+  }
+  return details;
+}
+
+function getConnectedSocketSnapshot(): ConnectedSocketSnapshot | null {
+  if (whatsappState.status !== "connected" || !whatsappState.sock) return null;
+  return {
+    socket: whatsappState.sock,
+    generation: connectedSocketGeneration,
+  };
+}
+
+function waitForConnectedSocketAfter(
+  afterGeneration: number,
+  timeoutMs: number,
+): Promise<ConnectedSocketSnapshot> {
+  const current = getConnectedSocketSnapshot();
+  if (current && current.generation > afterGeneration) {
+    return Promise.resolve(current);
+  }
+
+  return new Promise((resolve, reject) => {
+    const waiter: ConnectedSocketWaiter = {
+      afterGeneration,
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        connectedSocketWaiters.delete(waiter);
+        reject(new Error("Timed out waiting for WhatsApp reconnection."));
+      }, timeoutMs),
+    };
+    connectedSocketWaiters.add(waiter);
+  });
+}
+
+function notifyConnectedSocket(snapshot: ConnectedSocketSnapshot): void {
+  for (const waiter of connectedSocketWaiters) {
+    if (snapshot.generation <= waiter.afterGeneration) continue;
+    clearTimeout(waiter.timer);
+    connectedSocketWaiters.delete(waiter);
+    waiter.resolve(snapshot);
+  }
+}
+
+function isTransientSendError(error: unknown): boolean {
+  const details = safeErrorDetails(error);
+  if ([408, 428, 503].includes(details.statusCode ?? -1)) return true;
+  return ["ECONNRESET", "ETIMEDOUT", "EPIPE", "ERR_STREAM_DESTROYED"].includes(
+    String(details.errorCode ?? ""),
+  );
+}
+
+export function createResilientSocketAdapter(
+  getConnectedSocket: () => ConnectedSocketSnapshot | null,
+  waitForConnectedSocket: (
+    afterGeneration: number,
+    timeoutMs: number,
+  ) => Promise<ConnectedSocketSnapshot>,
+): ActiveSocket {
+  return {
+    async sendMessage(jid, content, options) {
+      let snapshot =
+        getConnectedSocket() ??
+        (await waitForConnectedSocket(-1, RECONNECT_WAIT_TIMEOUT_MS));
+      let retries = 0;
+
+      while (true) {
+        try {
+          return await snapshot.socket.sendMessage(jid, content, options);
+        } catch (error) {
+          if (!isTransientSendError(error) || retries >= SEND_RETRY_LIMIT) {
+            throw error;
+          }
+          retries += 1;
+          snapshot = await waitForConnectedSocket(
+            snapshot.generation,
+            RECONNECT_WAIT_TIMEOUT_MS,
+          );
+        }
+      }
+    },
+    async groupMetadata(jid) {
+      const snapshot = getConnectedSocket();
+      if (!snapshot) throw new Error("WhatsApp is not connected.");
+      return snapshot.socket.groupMetadata(jid);
+    },
+    async logout() {
+      const snapshot = getConnectedSocket();
+      if (!snapshot) throw new Error("WhatsApp is not connected.");
+      await snapshot.socket.logout();
+    },
+    end(error) {
+      getConnectedSocket()?.socket.end(error);
+    },
+  };
+}
+
+const resilientSocket = createResilientSocketAdapter(
+  getConnectedSocketSnapshot,
+  waitForConnectedSocketAfter,
+);
 
 async function getBaileysVersion(): Promise<[number, number, number]> {
   if (cachedVersion) return cachedVersion;
@@ -52,7 +200,7 @@ async function getBaileysVersion(): Promise<[number, number, number]> {
   } catch (error) {
     cachedVersion = [2, 3000, 1023853467];
     logger.warn(
-      { err: error },
+      safeErrorDetails(error),
       "Não foi possível consultar a versão do WhatsApp; usando a versão compatível conhecida",
     );
   }
@@ -97,7 +245,10 @@ async function rememberObservedGroup(
   try {
     groupName = (await socket.groupMetadata(groupId)).subject?.trim() || null;
   } catch (error) {
-    logger.debug({ err: error, groupId }, "Metadados do grupo indisponíveis");
+    logger.debug(
+      { ...safeErrorDetails(error), groupId },
+      "Metadados do grupo indisponíveis",
+    );
   }
   await observeGroup(groupId, groupName);
   observedGroupIds.add(groupId);
@@ -110,6 +261,7 @@ async function processMessages(
       id?: string | null;
       remoteJid?: string | null;
       participant?: string | null;
+      participantAlt?: string | null;
       fromMe?: boolean | null;
     };
     message?: {
@@ -119,6 +271,7 @@ async function processMessages(
       videoMessage?: { caption?: string | null } | null;
     } | null;
     pushName?: string | null;
+    messageStubType?: number | null;
   }>,
 ): Promise<void> {
   for (const message of messages) {
@@ -140,18 +293,104 @@ async function processMessages(
       content?.extendedTextMessage?.text ??
       content?.imageMessage?.caption ??
       content?.videoMessage?.caption ??
+      content?.documentMessage?.caption ??
       null;
-    await rememberObservedGroup(socket, groupId);
-    if (!text?.trim()) continue;
+    try {
+      await rememberObservedGroup(socket, groupId);
+    } catch (error) {
+      logger.error(
+        {
+          ...safeErrorDetails(error),
+          groupId,
+          messageId,
+        },
+        "Falha ao registrar o grupo da mensagem recebida",
+      );
+    }
+    const mentionedJids = extractMentionedJids(content);
+    const hasUserContent = hasNormalUserContent(
+      content,
+      message.messageStubType,
+    );
+    if (!text?.trim() && mentionedJids.length === 0 && !hasUserContent) {
+      continue;
+    }
 
-    await processIncomingCommand({
-      socket,
-      groupId,
-      senderJid: message.key.participant ?? null,
-      senderName: message.pushName ?? null,
-      text,
-    });
+    try {
+      await processIncomingCommand({
+        socket: resilientSocket,
+        groupId,
+        senderJid:
+          message.key.participant ?? message.key.participantAlt ?? null,
+        senderName: message.pushName ?? null,
+        text: text?.trim() ? text : null,
+        messageId,
+        mentionedJids,
+        hasUserContent,
+      });
+    } catch (error) {
+      logger.error(
+        {
+          ...safeErrorDetails(error),
+          groupId,
+          messageId,
+          senderPresent: Boolean(
+            message.key.participant ?? message.key.participantAlt,
+          ),
+        },
+        "Falha no processamento da mensagem recebida",
+      );
+      publishEvent("connection.error", {
+        message: "Falha ao processar uma mensagem recebida.",
+      });
+    }
   }
+}
+
+export function extractMentionedJids(content: unknown): string[] {
+  if (typeof content !== "object" || content === null) return [];
+  const message = content as Record<string, unknown>;
+  const candidates = [
+    message.extendedTextMessage,
+    message.imageMessage,
+    message.videoMessage,
+    message.documentMessage,
+    message.buttonsResponseMessage,
+    message.listResponseMessage,
+    message.templateButtonReplyMessage,
+    message.messageContextInfo,
+  ];
+  const mentionedJids = new Set<string>();
+  for (const candidate of candidates) {
+    if (typeof candidate !== "object" || candidate === null) continue;
+    const contextInfo =
+      "contextInfo" in candidate
+        ? (candidate as { contextInfo?: unknown }).contextInfo
+        : candidate;
+    if (typeof contextInfo !== "object" || contextInfo === null) continue;
+    const values = (contextInfo as { mentionedJid?: unknown }).mentionedJid;
+    if (!Array.isArray(values)) continue;
+    for (const value of values) {
+      if (typeof value === "string" && value.length > 0) {
+        mentionedJids.add(value);
+      }
+    }
+  }
+  return [...mentionedJids];
+}
+
+export function hasNormalUserContent(
+  content: unknown,
+  messageStubType?: number | null,
+): boolean {
+  if (messageStubType) return false;
+  if (typeof content !== "object" || content === null) return false;
+  const systemFields = new Set([
+    "messageContextInfo",
+    "protocolMessage",
+    "senderKeyDistributionMessage",
+  ]);
+  return Object.keys(content).some((field) => !systemFields.has(field));
 }
 
 async function openWhatsAppConnection(): Promise<void> {
@@ -194,7 +433,10 @@ async function openWhatsAppConnection(): Promise<void> {
 
     socket.ev.on("creds.update", () => {
       void saveCreds().catch((error: unknown) => {
-        logger.error({ err: error }, "Falha ao persistir credenciais do WhatsApp");
+        logger.error(
+          safeErrorDetails(error),
+          "Falha ao persistir credenciais do WhatsApp",
+        );
         publishEvent("connection.error", { message: "Falha ao salvar a sessão." });
       });
     });
@@ -250,16 +492,24 @@ async function openWhatsAppConnection(): Promise<void> {
         isStarting = false;
         reconnectAttempt = 0;
         whatsappState.status = "connected";
+        connectedSocketGeneration = generation;
         whatsappState.qr = null;
         whatsappState.qrTimestamp = null;
         whatsappState.qrExpiresAt = null;
         whatsappState.qrExpired = false;
         whatsappState.lastError = null;
         void updateWhatsAppSessionStatus(true).catch((error: unknown) => {
-          logger.error({ err: error }, "Falha ao atualizar status persistido");
+          logger.error(
+            safeErrorDetails(error),
+            "Falha ao atualizar status persistido",
+          );
         });
         publishEvent("whatsapp.connected");
         logger.info("WhatsApp conectado");
+        notifyConnectedSocket({
+          socket: activeSocket,
+          generation,
+        });
       }
 
       if (connection === "close") {
@@ -271,7 +521,10 @@ async function openWhatsAppConnection(): Promise<void> {
         whatsappState.qrExpiresAt = null;
         whatsappState.sock = null;
         void updateWhatsAppSessionStatus(false).catch((error: unknown) => {
-          logger.error({ err: error }, "Falha ao atualizar status persistido");
+          logger.error(
+            safeErrorDetails(error),
+            "Falha ao atualizar status persistido",
+          );
         });
 
         const error = lastDisconnect?.error as
@@ -317,7 +570,10 @@ async function openWhatsAppConnection(): Promise<void> {
       }
       if (type !== "notify") return;
       void processMessages(activeSocket, messages).catch((error: unknown) => {
-        logger.error({ err: error }, "Erro ao processar mensagens recebidas");
+        logger.error(
+          safeErrorDetails(error),
+          "Erro ao processar mensagens recebidas",
+        );
         publishEvent("connection.error", {
           message: "Falha ao processar uma mensagem recebida.",
         });
@@ -372,7 +628,10 @@ export async function disconnectWhatsApp(): Promise<void> {
   try {
     await updateWhatsAppSessionStatus(false);
   } catch (error) {
-    logger.error({ err: error }, "Falha ao atualizar status persistido do WhatsApp");
+    logger.error(
+      safeErrorDetails(error),
+      "Falha ao atualizar status persistido do WhatsApp",
+    );
   }
   try {
     socket?.end(new Error("Conexão encerrada pelo administrador."));
@@ -405,7 +664,10 @@ export async function restartWhatsApp(): Promise<void> {
   try {
     await updateWhatsAppSessionStatus(false);
   } catch (error) {
-    logger.error({ err: error }, "Falha ao atualizar status antes da reinicialização");
+    logger.error(
+      safeErrorDetails(error),
+      "Falha ao atualizar status antes da reinicialização",
+    );
   }
   socket?.end(new Error("Conexão reiniciada pelo administrador."));
   publishEvent("whatsapp.restarting", { manual: true });
@@ -467,6 +729,9 @@ export function stopWhatsAppForShutdown(): void {
   isStarting = false;
   socket?.end(new Error("Servidor sendo encerrado."));
   void updateWhatsAppSessionStatus(false).catch((error: unknown) => {
-    logger.warn({ err: error }, "Falha ao atualizar o status no encerramento");
+    logger.warn(
+      safeErrorDetails(error),
+      "Falha ao atualizar o status no encerramento",
+    );
   });
 }

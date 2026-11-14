@@ -76,12 +76,34 @@ test(
 
       await processIncomingCommand({
         socket,
+        groupId,
+        senderJid: "5511999999999@s.whatsapp.net",
+        senderName: "Ana",
+        text: "!menu",
+      });
+      assert.equal(replies.length, 2);
+      assert.equal(replies[1]?.jid, groupId);
+      assert.match(replies[1]?.text ?? "", new RegExp(`!${name}`));
+
+      await processIncomingCommand({
+        socket,
+        groupId,
+        senderJid: "5511999999999@s.whatsapp.net",
+        senderName: "Ana",
+        text: "!comandos",
+      });
+      assert.equal(replies.length, 3);
+      assert.equal(replies[2]?.jid, groupId);
+      assert.match(replies[2]?.text ?? "", new RegExp(`!${name}`));
+
+      await processIncomingCommand({
+        socket,
         groupId: blockedGroupId,
         senderJid: "5511888888888@s.whatsapp.net",
         senderName: "Bruno",
         text: `!${name}`,
       });
-      assert.equal(replies.length, 1, "unapproved groups must not receive replies");
+      assert.equal(replies.length, 3, "unapproved groups must not receive replies");
 
       const logs = await db
         .select({ status: commandLogsTable.status })

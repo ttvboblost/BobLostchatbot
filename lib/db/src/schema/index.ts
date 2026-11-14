@@ -1,4 +1,5 @@
 export * from "./bot-settings.js";
+export * from "./afk.js";
 export * from "./admin-audit-logs.js";
 export * from "./command-logs.js";
 export * from "./commands.js";
