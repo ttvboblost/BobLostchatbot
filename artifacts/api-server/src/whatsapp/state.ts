@@ -14,6 +14,10 @@ export interface ActiveSocket {
   groupMetadata(jid: string): Promise<{ subject?: string }>;
   logout(): Promise<void>;
   end(error?: Error): void;
+  getSendDiagnostics?(): {
+    connected: boolean;
+    generation: number | null;
+  };
 }
 
 interface WhatsAppState {

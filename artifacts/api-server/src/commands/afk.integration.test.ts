@@ -32,7 +32,7 @@ test(
     const groupA = `${suffix}@g.us`;
     const groupB = `${suffix}b@g.us`;
     const userA = `${suffix}1@s.whatsapp.net`;
-    const userB = `${suffix}2@s.whatsapp.net`;
+    const userB = `${suffix}2@lid`;
     const userC = `${suffix}3@s.whatsapp.net`;
     const otherUser = `${suffix}4@s.whatsapp.net`;
     const sent: Array<{ jid: string; text: string; mentions?: string[] }> = [];
@@ -106,6 +106,8 @@ test(
         .from(afkStatusesTable)
         .where(eq(afkStatusesTable.userJid, userB));
       assert.equal(storedB?.reason, "Não informou um motivo.");
+      assert.equal(sent.at(-1)?.jid, groupA, "a participant LID must never be the reply destination");
+      assert.deepEqual(sent.at(-1)?.mentions, [userB]);
       assert.ok(sent.at(-1)?.text.includes("Não informou um motivo."));
 
       await processIncomingCommand(

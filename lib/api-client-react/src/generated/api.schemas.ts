@@ -190,6 +190,8 @@ export interface Command {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Comando nativo do sistema; não pode ser gerenciado pelo painel. */
+  isNative?: boolean;
 }
 
 export interface CommandResponse {
@@ -221,6 +223,11 @@ export interface GroupListResponse {
   data: Group[];
 }
 
+/**
+ * @nullable
+ */
+export type CommandLogErrorContext = { [key: string]: unknown } | null;
+
 export interface CommandLog {
   id: string;
   /** @nullable */
@@ -230,6 +237,16 @@ export interface CommandLog {
   /** @nullable */
   senderJid: string | null;
   status: string;
+  /** @nullable */
+  errorName: string | null;
+  /** @nullable */
+  errorMessage: string | null;
+  /** @nullable */
+  errorCode: string | null;
+  /** @nullable */
+  errorStatusCode: number | null;
+  /** @nullable */
+  errorContext: CommandLogErrorContext;
   createdAt: string;
 }
 

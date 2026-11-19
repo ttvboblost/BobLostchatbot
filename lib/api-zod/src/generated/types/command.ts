@@ -16,4 +16,6 @@ export interface Command {
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
+  /** Comando nativo do sistema; não pode ser gerenciado pelo painel. */
+  isNative?: boolean;
 }

@@ -43,7 +43,7 @@ async function shutdown(signal: string): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
   logger.info({ signal }, "Encerrando servidor");
-  stopWhatsAppForShutdown();
+  await stopWhatsAppForShutdown();
   server.close(() => {
     void pool.end();
     process.exit(0);

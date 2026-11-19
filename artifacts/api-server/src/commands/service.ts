@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import {
   afkStatusesTable,
@@ -40,6 +40,7 @@ async function writeCommandLog(
   commandName: string,
   status: string,
   commandId: string | null,
+  failure?: SendFailureDiagnostic,
 ): Promise<void> {
   await db.insert(commandLogsTable).values({
     groupId,
@@ -47,19 +48,43 @@ async function writeCommandLog(
     commandName,
     status,
     commandId,
+    errorName: failure?.errorName ?? null,
+    errorMessage: failure?.errorMessage ?? null,
+    errorCode:
+      failure?.errorCode === undefined ? null : String(failure.errorCode),
+    errorStatusCode: failure?.statusCode ?? null,
+    errorContext: failure?.context ?? null,
   });
+}
+
+interface SendFailureDiagnostic {
+  errorName: string;
+  errorMessage: string;
+  errorCode?: string | number;
+  statusCode?: number;
+  context: Record<string, unknown>;
+}
+
+interface SendGroupReplyResult {
+  sent: boolean;
+  failure?: SendFailureDiagnostic;
 }
 
 function getSafeErrorDetails(error: unknown): {
   errorName: string;
+  errorMessage: string;
   errorCode?: string | number;
   statusCode?: number;
 } {
   if (typeof error !== "object" || error === null) {
-    return { errorName: "UnknownError" };
+    return {
+      errorName: "UnknownError",
+      errorMessage: typeof error === "string" ? error.slice(0, 500) : "Unknown error",
+    };
   }
   const details: {
     errorName: string;
+    errorMessage: string;
     errorCode?: string | number;
     statusCode?: number;
   } = {
@@ -67,6 +92,10 @@ function getSafeErrorDetails(error: unknown): {
       "name" in error && typeof error.name === "string"
         ? error.name
         : "UnknownError",
+    errorMessage:
+      "message" in error && typeof error.message === "string"
+        ? error.message.slice(0, 500)
+        : "Baileys sendMessage failed without an error message",
   };
   if (
     "code" in error &&
@@ -84,6 +113,16 @@ function getSafeErrorDetails(error: unknown): {
     details.statusCode = error.output.statusCode;
   }
   return details;
+}
+
+function sanitizeFailureMessage(message: string): string {
+  return message
+    .replace(
+      /\b(password|token|secret|authorization|cookie|session)\b(\s*[:=]\s*)[^\s,;]+/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(/\b(?:postgres(?:ql)?|https?):\/\/\S+/gi, "[REDACTED_URL]")
+    .slice(0, 500);
 }
 
 function participantMention(jid: string): string {
@@ -149,32 +188,69 @@ async function sendGroupReply(
   message: IncomingGroupMessage,
   text: string,
   options: { mentions?: string[]; action: string },
-): Promise<boolean> {
+): Promise<SendGroupReplyResult> {
+  const socketBefore = message.socket.getSendDiagnostics?.() ?? null;
+  const mentionDomains = [
+    ...new Set(
+      (options.mentions ?? []).map((jid) => jid.split("@").at(-1) ?? "unknown"),
+    ),
+  ];
+  const context = {
+    action: options.action,
+    groupId: message.groupId,
+    destinationJid: message.groupId,
+    destinationType: "group",
+    socketConnectedBefore: socketBefore?.connected ?? null,
+    socketGenerationBefore: socketBefore?.generation ?? null,
+    incomingMessageId: message.messageId ?? null,
+    mentionCount: options.mentions?.length ?? 0,
+    mentionDomains,
+  };
+
+  if (!message.groupId.endsWith("@g.us")) {
+    const failure: SendFailureDiagnostic = {
+      errorName: "InvalidGroupDestination",
+      errorMessage: "Refusing to send a group reply to a non-group JID.",
+      context,
+    };
+    logger.error(failure, "Resposta recusada: destino não é um grupo WhatsApp");
+    return { sent: false, failure };
+  }
+
   try {
     const messageId = `BAE5${randomBytes(6).toString("hex").toUpperCase()}`;
-    await message.socket.sendMessage(message.groupId, {
-      text,
-      ...(options.mentions?.length ? { mentions: options.mentions } : {}),
-    }, { messageId });
+    await message.socket.sendMessage(
+      message.groupId,
+      {
+        text,
+        ...(options.mentions?.length ? { mentions: options.mentions } : {}),
+      },
+      { messageId },
+    );
     logger.info(
       {
-        action: options.action,
-        groupId: message.groupId,
-        destinationJid: message.groupId,
+        ...context,
         messageId: message.messageId ?? null,
       },
       "Resposta enviada ao grupo de origem",
     );
-    return true;
+    return { sent: true };
   } catch (error) {
     const details = getSafeErrorDetails(error);
+    const failure: SendFailureDiagnostic = {
+      ...details,
+      errorMessage: sanitizeFailureMessage(details.errorMessage),
+      context: {
+        ...context,
+        socketConnectedAfter:
+          message.socket.getSendDiagnostics?.()?.connected ?? null,
+        socketGenerationAfter:
+          message.socket.getSendDiagnostics?.()?.generation ?? null,
+      },
+    };
     logger.error(
       {
-        ...details,
-        action: options.action,
-        groupId: message.groupId,
-        destinationJid: message.groupId,
-        messageId: message.messageId ?? null,
+        ...failure,
       },
       "Baileys sendMessage falhou no grupo de origem",
     );
@@ -183,7 +259,7 @@ async function sendGroupReply(
       action: options.action,
       statusCode: details.statusCode ?? null,
     });
-    return false;
+    return { sent: false, failure };
   }
 }
 
@@ -313,17 +389,19 @@ export async function processIncomingCommand(
       })
       .returning();
     const mention = participantMention(message.senderJid);
-    const sent = await sendGroupReply(
+    const sendResult = await sendGroupReply(
       message,
       `😴 ${mention} está AFK!\n\n📝 Motivo: ${afkStatus?.reason ?? reason}`,
       { mentions: [message.senderJid], action: "afk_activated" },
     );
+    const sent = sendResult.sent;
     await writeCommandLog(
       message.groupId,
       message.senderJid,
       "afk",
       sent ? "afk_activated" : "afk_activation_send_failed",
       null,
+      sendResult.failure,
     );
     publishEvent("afk.activated", {
       groupId: message.groupId,
@@ -348,11 +426,12 @@ export async function processIncomingCommand(
       const duration = formatAfkDuration(
         returnedAt.getTime() - removedAfk.activatedAt.getTime(),
       );
-      const sent = await sendGroupReply(
+      const sendResult = await sendGroupReply(
         message,
         `👋 Bem-vindo de volta, ${participantMention(message.senderJid)}!\n\n✅ Seu status AFK foi removido.\n\n⏱️ Você ficou AFK por: ${duration}.`,
         { mentions: [message.senderJid], action: "afk_returned" },
       );
+      const sent = sendResult.sent;
       if (!sent) {
         await db
           .insert(afkStatusesTable)
@@ -370,6 +449,7 @@ export async function processIncomingCommand(
         "afk",
         sent ? "afk_returned" : "afk_return_send_failed",
         null,
+        sendResult.failure,
       );
       publishEvent("afk.returned", {
         groupId: message.groupId,
@@ -389,16 +469,18 @@ export async function processIncomingCommand(
           `😴 ${participantMention(status.userJid)} está AFK!\n\n📝 Motivo: ${status.reason.trim() || DEFAULT_AFK_REASON}`,
       )
       .join("\n\n");
-    const sent = await sendGroupReply(message, text, {
+    const sendResult = await sendGroupReply(message, text, {
       mentions: uniqueAfkRows.map((status) => status.userJid),
       action: "afk_mention",
     });
+    const sent = sendResult.sent;
     await writeCommandLog(
       message.groupId,
       message.senderJid,
       "afk_mention",
       sent ? "afk_mention_notified" : "afk_mention_send_failed",
       null,
+      sendResult.failure,
     );
     publishEvent("afk.mentioned", {
       groupId: message.groupId,
@@ -484,9 +566,10 @@ export async function processIncomingCommand(
     timezone,
   });
 
-  const sent = await sendGroupReply(message, response, {
+  const sendResult = await sendGroupReply(message, response, {
     action: `command_${parsed.name}`,
   });
+  const sent = sendResult.sent;
   if (!sent) {
     await writeCommandLog(
       message.groupId,
@@ -494,6 +577,7 @@ export async function processIncomingCommand(
       parsed.name,
       "send_failed",
       command?.id ?? null,
+      sendResult.failure,
     );
     publishEvent("command.executed", {
       groupId: message.groupId,

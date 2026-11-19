@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx --test src/commands/processor.test.ts src/commands/service.test.ts src/commands/afk.integration.test.ts src/middlewares/admin-auth.test.ts src/routes/admin.integration.test.ts src/whatsapp/bot.test.ts"
+    "test": "tsx --test src/commands/processor.test.ts src/commands/service.test.ts src/commands/afk.integration.test.ts src/middlewares/admin-auth.test.ts src/routes/admin.integration.test.ts src/whatsapp/bot.test.ts src/whatsapp/persistent-auth.test.ts src/whatsapp/instance-lock.test.ts"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

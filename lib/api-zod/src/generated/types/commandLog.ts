@@ -7,6 +7,7 @@ iniciar uma sessão protegida por cookie HttpOnly ou autenticação Bearer.
 
  * OpenAPI spec version: 1.0.0
  */
+import type { CommandLogErrorContext } from './commandLogErrorContext';
 
 export interface CommandLog {
   id: string;
@@ -17,5 +18,15 @@ export interface CommandLog {
   /** @nullable */
   senderJid: string | null;
   status: string;
+  /** @nullable */
+  errorName: string | null;
+  /** @nullable */
+  errorMessage: string | null;
+  /** @nullable */
+  errorCode: string | null;
+  /** @nullable */
+  errorStatusCode: number | null;
+  /** @nullable */
+  errorContext: CommandLogErrorContext;
   createdAt: Date;
 }

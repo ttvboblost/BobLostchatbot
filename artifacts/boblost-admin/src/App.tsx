@@ -311,21 +311,185 @@ function ActivityPage({ notify }: { notify: (message: string, error?: boolean) =
   const [status, setStatus] = useState('');
   const [range, setRange] = useState('all');
   const params = useMemo(() => {
-    const after = range === 'day' ? new Date(Date.now() - 86400000).toISOString() : range === 'week' ? new Date(Date.now() - 7 * 86400000).toISOString() : undefined;
-    return { ...(command.trim() ? { commandName: command.trim() } : {}), ...(group.trim() ? { groupId: group.trim() } : {}), ...(status ? { status } : {}), ...(after ? { after } : {}), limit: 100 };
+    const after =
+      range === 'day'
+        ? new Date(Date.now() - 86400000).toISOString()
+        : range === 'week'
+          ? new Date(Date.now() - 7 * 86400000).toISOString()
+          : undefined;
+    return {
+      ...(command.trim() ? { commandName: command.trim() } : {}),
+      ...(group.trim() ? { groupId: group.trim() } : {}),
+      ...(status ? { status } : {}),
+      ...(after ? { after } : {}),
+      limit: 100,
+    };
   }, [command, group, status, range]);
-  const logs = useListCommandLogs(params, { query: { queryKey: getListCommandLogsQueryKey(params) } });
-  const retry = () => { notify('Refreshing activity…'); void logs.refetch(); };
-  return <>
-    <Heading eyebrow="Operations / Activity" title="Command activity" description="A practical audit trail of command runs across your groups." action={<button className="button button-secondary" onClick={retry} data-testid="button-refresh-activity"><RefreshCw />Refresh</button>} />
-    <div className="toolbar">
-      <div className="searchbox"><Search /><input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="Filter command name…" aria-label="Filter by command" data-testid="input-filter-command" /></div>
-      <input className="filter-select" value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Group ID" aria-label="Filter by group ID" data-testid="input-filter-group" />
-      <select className="filter-select" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filter by result" data-testid="select-filter-status"><option value="">All results</option><option value="success">Success</option><option value="error">Error</option><option value="failed">Failed</option></select>
-      <select className="filter-select" value={range} onChange={(e) => setRange(e.target.value)} aria-label="Filter by date range" data-testid="select-filter-range"><option value="all">Any time</option><option value="day">Last 24 hours</option><option value="week">Last 7 days</option></select>
-    </div>
-    {logs.isLoading ? <LoadingPanel rows={7} /> : logs.isError ? <ErrorPanel retry={() => void logs.refetch()} /> : <section className="panel animate-in"><div className="panel-head"><div><h2 className="panel-title">Execution log</h2><div className="panel-kicker">Most recent first · up to 100 records</div></div><span className="activity-meta">{logs.data?.data?.length || 0} results</span></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Command</th><th>Group</th><th>Sender</th><th>Result</th><th>Time</th></tr></thead><tbody>{(logs.data?.data || []).map((entry) => <tr key={entry.id} data-testid={`row-activity-${entry.id}`}><td><span className="name-cell">!{entry.commandName.replace(/^!/, '')}</span></td><td><span className="sub-cell mono">{entry.groupId}</span></td><td><span className="sub-cell mono">{entry.senderJid || '—'}</span></td><td><span className={`status-pill ${['success', 'ok', 'completed'].includes(entry.status.toLowerCase()) ? 'status-connected' : 'status-error'}`}><span className="dot" />{entry.status}</span></td><td><span className="activity-meta">{formatDate(entry.createdAt)} · {formatTime(entry.createdAt)}</span></td></tr>)}</tbody></table>{logs.data?.data?.length === 0 && <EmptyState icon={<Activity />} title="No executions match" text="Try broadening the filters. New command activity will appear here." />}</div></section>}
-  </>;
+  const logs = useListCommandLogs(params, {
+    query: { queryKey: getListCommandLogsQueryKey(params) },
+  });
+  const retry = () => {
+    notify('Refreshing activity…');
+    void logs.refetch();
+  };
+  return (
+    <>
+      <Heading
+        eyebrow="Operations / Activity"
+        title="Command activity"
+        description="A practical audit trail of command runs across your groups."
+        action={
+          <button
+            className="button button-secondary"
+            onClick={retry}
+            data-testid="button-refresh-activity"
+          >
+            <RefreshCw />
+            Refresh
+          </button>
+        }
+      />
+      <div className="toolbar">
+        <div className="searchbox">
+          <Search />
+          <input
+            value={command}
+            onChange={(event) => setCommand(event.target.value)}
+            placeholder="Filter command name…"
+            aria-label="Filter by command"
+            data-testid="input-filter-command"
+          />
+        </div>
+        <input
+          className="filter-select"
+          value={group}
+          onChange={(event) => setGroup(event.target.value)}
+          placeholder="Group ID"
+          aria-label="Filter by group ID"
+          data-testid="input-filter-group"
+        />
+        <select
+          className="filter-select"
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+          aria-label="Filter by result"
+          data-testid="select-filter-status"
+        >
+          <option value="">All results</option>
+          <option value="executed">Executed</option>
+          <option value="send_failed">Send failed</option>
+          <option value="afk_activation_send_failed">AFK activation failed</option>
+          <option value="afk_return_send_failed">AFK return failed</option>
+          <option value="afk_mention_send_failed">AFK mention failed</option>
+        </select>
+        <select
+          className="filter-select"
+          value={range}
+          onChange={(event) => setRange(event.target.value)}
+          aria-label="Filter by date range"
+          data-testid="select-filter-range"
+        >
+          <option value="all">Any time</option>
+          <option value="day">Last 24 hours</option>
+          <option value="week">Last 7 days</option>
+        </select>
+      </div>
+      {logs.isLoading ? (
+        <LoadingPanel rows={7} />
+      ) : logs.isError ? (
+        <ErrorPanel retry={() => void logs.refetch()} />
+      ) : (
+        <section className="panel animate-in">
+          <div className="panel-head">
+            <div>
+              <h2 className="panel-title">Execution log</h2>
+              <div className="panel-kicker">Most recent first · up to 100 records</div>
+            </div>
+            <span className="activity-meta">{logs.data?.data?.length || 0} results</span>
+          </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Command</th>
+                  <th>Group</th>
+                  <th>Sender</th>
+                  <th>Result</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(logs.data?.data || []).map((entry) => (
+                  <tr key={entry.id} data-testid={`row-activity-${entry.id}`}>
+                    <td>
+                      <span className="name-cell">
+                        !{entry.commandName.replace(/^!/, '')}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="sub-cell mono">{entry.groupId}</span>
+                    </td>
+                    <td>
+                      <span className="sub-cell mono">{entry.senderJid || '—'}</span>
+                    </td>
+                    <td>
+                      <span
+                        className={`status-pill ${['executed', 'success', 'ok', 'completed'].includes(entry.status.toLowerCase()) ? 'status-connected' : 'status-error'}`}
+                      >
+                        <span className="dot" />
+                        {entry.status}
+                      </span>
+                      {entry.errorMessage && (
+                        <div
+                          className="sub-cell"
+                          data-testid={`send-error-${entry.id}`}
+                          style={{ maxWidth: 420, whiteSpace: 'normal', marginTop: 6 }}
+                        >
+                          <strong>
+                            {entry.errorName || 'Send error'}
+                            {entry.errorCode ? ` · code ${entry.errorCode}` : ''}
+                            {entry.errorStatusCode
+                              ? ` · status ${entry.errorStatusCode}`
+                              : ''}
+                          </strong>
+                          <div>{entry.errorMessage}</div>
+                          {typeof entry.errorContext?.destinationJid === 'string' && (
+                            <div className="mono">
+                              Target: {entry.errorContext.destinationJid}
+                              {' · socket '}
+                              {entry.errorContext.socketConnectedBefore === true
+                                ? 'connected'
+                                : entry.errorContext.socketConnectedBefore === false
+                                  ? 'disconnected'
+                                  : 'unknown'}
+                              {typeof entry.errorContext.socketGenerationBefore === 'number' &&
+                                ` · generation ${entry.errorContext.socketGenerationBefore}`}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className="activity-meta">
+                        {formatDate(entry.createdAt)} · {formatTime(entry.createdAt)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {logs.data?.data?.length === 0 && (
+              <EmptyState
+                icon={<Activity />}
+                title="No executions match"
+                text="Try broadening the filters. New command activity will appear here."
+              />
+            )}
+          </div>
+        </section>
+      )}
+    </>
+  );
 }
 
 function Modal({ title, subtitle, children, onClose }: { title: string; subtitle: string; children: ReactNode; onClose: () => void }) {

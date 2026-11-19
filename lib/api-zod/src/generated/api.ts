@@ -181,7 +181,8 @@ export const ListCommandsResponse = zod.object({
   "responseContent": zod.string(),
   "isActive": zod.boolean(),
   "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date()
+  "updatedAt": zod.coerce.date(),
+  "isNative": zod.boolean().optional().describe('Comando nativo do sistema; não pode ser gerenciado pelo painel.')
 }))
 })
 
@@ -234,7 +235,8 @@ export const UpdateCommandResponse = zod.object({
   "responseContent": zod.string(),
   "isActive": zod.boolean(),
   "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date()
+  "updatedAt": zod.coerce.date(),
+  "isNative": zod.boolean().optional().describe('Comando nativo do sistema; não pode ser gerenciado pelo painel.')
 })
 })
 
@@ -268,7 +270,8 @@ export const ActivateCommandResponse = zod.object({
   "responseContent": zod.string(),
   "isActive": zod.boolean(),
   "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date()
+  "updatedAt": zod.coerce.date(),
+  "isNative": zod.boolean().optional().describe('Comando nativo do sistema; não pode ser gerenciado pelo painel.')
 })
 })
 
@@ -289,7 +292,8 @@ export const DeactivateCommandResponse = zod.object({
   "responseContent": zod.string(),
   "isActive": zod.boolean(),
   "createdAt": zod.coerce.date(),
-  "updatedAt": zod.coerce.date()
+  "updatedAt": zod.coerce.date(),
+  "isNative": zod.boolean().optional().describe('Comando nativo do sistema; não pode ser gerenciado pelo painel.')
 })
 })
 
@@ -379,6 +383,11 @@ export const ListCommandLogsResponse = zod.object({
   "groupId": zod.string(),
   "senderJid": zod.string().nullable(),
   "status": zod.string(),
+  "errorName": zod.string().nullable(),
+  "errorMessage": zod.string().nullable(),
+  "errorCode": zod.string().nullable(),
+  "errorStatusCode": zod.number().nullable(),
+  "errorContext": zod.record(zod.string(), zod.unknown()).nullable(),
   "createdAt": zod.coerce.date()
 }))
 })

@@ -1,4 +1,12 @@
-import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { commandsTable } from "./commands.js";
 
 export const commandLogsTable = pgTable(
@@ -12,6 +20,11 @@ export const commandLogsTable = pgTable(
     groupId: text("group_id").notNull(),
     senderJid: text("sender_jid"),
     status: text("status").notNull(),
+    errorName: text("error_name"),
+    errorMessage: text("error_message"),
+    errorCode: text("error_code"),
+    errorStatusCode: integer("error_status_code"),
+    errorContext: jsonb("error_context").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

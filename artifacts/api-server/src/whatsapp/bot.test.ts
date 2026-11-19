@@ -65,11 +65,13 @@ test("retries a transient Baileys send after reconnect with the same message ID"
       return { key: { id: options?.messageId } };
     },
   };
+  let activeSnapshot = { socket: firstSocket, generation: 1 };
   const adapter = createResilientSocketAdapter(
-    () => ({ socket: firstSocket, generation: 1 }),
+    () => activeSnapshot,
     async (generation) => {
       assert.equal(generation, 1);
-      return { socket: secondSocket, generation: 2 };
+      activeSnapshot = { socket: secondSocket, generation: 2 };
+      return activeSnapshot;
     },
   );
 
@@ -82,4 +84,8 @@ test("retries a transient Baileys send after reconnect with the same message ID"
   assert.deepEqual(destinations, ["120000000-123@g.us", "120000000-123@g.us"]);
   assert.deepEqual(messageIds, ["BAE5A1B2C3D4E5F6", "BAE5A1B2C3D4E5F6"]);
   assert.deepEqual(result, { key: { id: "BAE5A1B2C3D4E5F6" } });
+  assert.deepEqual(adapter.getSendDiagnostics?.(), {
+    connected: true,
+    generation: 2,
+  });
 });

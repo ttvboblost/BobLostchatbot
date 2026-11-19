@@ -22,6 +22,7 @@ export * from './badRequestResponse';
 export * from './command';
 export * from './commandListResponse';
 export * from './commandLog';
+export * from './commandLogErrorContext';
 export * from './commandLogListResponse';
 export * from './commandResponse';
 export * from './createCommand';

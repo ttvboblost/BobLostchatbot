@@ -1,8 +1,9 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Response } from "express";
 import { eq, gte, sql } from "drizzle-orm";
 import QRCode from "qrcode";
 import {
   disconnectWhatsApp,
+  ownsWhatsAppSessionProcess,
   restartWhatsApp,
   startWhatsAppBot,
   unlinkWhatsApp,
@@ -17,6 +18,21 @@ import {
 import { recordAdminAudit } from "../lib/admin-audit.js";
 
 const router: IRouter = Router();
+
+function requireWhatsAppOwner(
+  res: Response,
+): boolean {
+  if (ownsWhatsAppSessionProcess()) return true;
+  res.status(409).json({
+    success: false,
+    error: {
+      code: "WHATSAPP_INSTANCE_NOT_OWNER",
+      message:
+        "Esta instância não controla a sessão WhatsApp. Aguarde o processo ativo ou tente novamente.",
+    },
+  });
+  return false;
+}
 
 router.get("/overview", async (_req, res): Promise<void> => {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -131,12 +147,15 @@ router.post("/whatsapp/connect", async (_req, res): Promise<void> => {
     success: true,
     data: {
       status: whatsappState.status,
-      message: "Conexão com o WhatsApp iniciada ou já em andamento.",
+      message:
+        whatsappState.lastError ??
+        "Conexão com o WhatsApp iniciada ou já em andamento.",
     },
   });
 });
 
 router.post("/whatsapp/disconnect", async (_req, res): Promise<void> => {
+  if (!requireWhatsAppOwner(res)) return;
   await disconnectWhatsApp();
   await recordAdminAudit({
     action: "whatsapp.disconnect",
@@ -153,6 +172,7 @@ router.post("/whatsapp/disconnect", async (_req, res): Promise<void> => {
 });
 
 router.post("/whatsapp/restart", async (_req, res): Promise<void> => {
+  if (!requireWhatsAppOwner(res)) return;
   await restartWhatsApp();
   await recordAdminAudit({
     action: "whatsapp.restart",
@@ -166,6 +186,7 @@ router.post("/whatsapp/restart", async (_req, res): Promise<void> => {
 });
 
 router.post("/whatsapp/unlink", async (_req, res): Promise<void> => {
+  if (!requireWhatsAppOwner(res)) return;
   await unlinkWhatsApp();
   await recordAdminAudit({
     action: "whatsapp.unlink",

@@ -16,7 +16,7 @@ test(
       db,
       pool,
     } = await import("@workspace/db");
-    const { eq, inArray } = await import("drizzle-orm");
+    const { and, eq, inArray } = await import("drizzle-orm");
     const { processIncomingCommand } = await import("./service.js");
     closeDatabase = () => pool.end();
 
@@ -27,8 +27,15 @@ test(
     let primaryError: unknown;
     const socket = {
       sendMessage: async (jid: string, content: { text: string }) => {
+        if (content.text === "SIMULATED_SEND_FAILURE") {
+          throw Object.assign(new Error("Connection Closed"), {
+            code: "EPIPE",
+            output: { statusCode: 428 },
+          });
+        }
         replies.push({ jid, text: content.text });
       },
+      getSendDiagnostics: () => ({ connected: true, generation: 7 }),
       groupMetadata: async () => ({ subject: "Test group" }),
       logout: async () => {},
       end: () => {},
@@ -96,6 +103,19 @@ test(
       assert.equal(replies[2]?.jid, groupId);
       assert.match(replies[2]?.text ?? "", new RegExp(`!${name}`));
 
+      await db
+        .update(commandsTable)
+        .set({ responseContent: "SIMULATED_SEND_FAILURE" })
+        .where(eq(commandsTable.name, name));
+      await processIncomingCommand({
+        socket,
+        groupId,
+        senderJid: "5511999999999@s.whatsapp.net",
+        senderName: "Ana",
+        text: `!${name}`,
+      });
+      assert.equal(replies.length, 3, "failed sends must not be marked as delivered");
+
       await processIncomingCommand({
         socket,
         groupId: blockedGroupId,
@@ -112,6 +132,26 @@ test(
       assert.ok(logs.some((log) => log.status === "inactive_command"));
       assert.ok(logs.some((log) => log.status === "executed"));
       assert.ok(logs.some((log) => log.status === "blocked_group"));
+      const failureLog = logs.find((log) => log.status === "send_failed");
+      assert.ok(failureLog);
+      const [diagnostic] = await db
+        .select()
+        .from(commandLogsTable)
+        .where(
+          and(
+            eq(commandLogsTable.groupId, groupId),
+            eq(commandLogsTable.status, "send_failed"),
+          ),
+        )
+        .orderBy(commandLogsTable.createdAt)
+        .limit(1);
+      assert.equal(diagnostic?.errorName, "Error");
+      assert.equal(diagnostic?.errorMessage, "Connection Closed");
+      assert.equal(diagnostic?.errorCode, "EPIPE");
+      assert.equal(diagnostic?.errorStatusCode, 428);
+      assert.equal(diagnostic?.errorContext?.destinationJid, groupId);
+      assert.equal(diagnostic?.errorContext?.socketConnectedBefore, true);
+      assert.equal(diagnostic?.errorContext?.socketGenerationBefore, 7);
     } catch (error) {
       primaryError = error;
       throw error;

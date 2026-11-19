@@ -776,10 +776,33 @@ components:
           type: [string, "null"]
         status:
           type: string
+        errorName:
+          type: [string, "null"]
+        errorMessage:
+          type: [string, "null"]
+        errorCode:
+          type: [string, "null"]
+        errorStatusCode:
+          type: [integer, "null"]
+        errorContext:
+          type: [object, "null"]
+          additionalProperties: true
         createdAt:
           type: string
           format: date-time
-      required: [id, commandId, commandName, groupId, senderJid, status, createdAt]
+      required:
+        - id
+        - commandId
+        - commandName
+        - groupId
+        - senderJid
+        - status
+        - errorName
+        - errorMessage
+        - errorCode
+        - errorStatusCode
+        - errorContext
+        - createdAt
     CommandLogListResponse:
       type: object
       properties:
