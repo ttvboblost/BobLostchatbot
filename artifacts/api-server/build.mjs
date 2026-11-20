@@ -3,15 +3,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 
-// Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
+// Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies.
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
+  const entryFile = path.join(distDir, "index.mjs");
+
   await rm(distDir, { recursive: true, force: true });
 
   await esbuild({
@@ -22,15 +24,8 @@ async function buildAll() {
     outdir: distDir,
     outExtension: { ".js": ".mjs" },
     logLevel: "info",
-    // Some packages may not be bundleable, so we externalize them, we can add more here as needed.
-    // Some of the packages below may not be imported or installed, but we're adding them in case they are in the future.
-    // Examples of unbundleable packages:
-    // - uses native modules and loads them dynamically (e.g. sharp)
-    // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
-      // Baileys and its dependencies — externalized because they use dynamic requires,
-      // crypto native bindings, and other patterns incompatible with esbuild bundling
       "@whiskeysockets/baileys",
       "@adiwajshing/keyed-db",
       "@hapi/boom",
@@ -40,7 +35,6 @@ async function buildAll() {
       "get-browser-rtc",
       "link-preview-js",
       "@aws-sdk/client-s3",
-      // General unbundleable packages
       "sharp",
       "better-sqlite3",
       "sqlite3",
@@ -111,14 +105,12 @@ async function buildAll() {
       "playwright",
       "puppeteer",
       "puppeteer-core",
-      "electron",
+      "electron"
     ],
     sourcemap: "linked",
     plugins: [
-      // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })
     ],
-    // Make sure packages that are cjs only (e.g. express) but are bundled continue to work in our esm output file
     banner: {
       js: `import { createRequire as __bannerCrReq } from 'node:module';
 import __bannerPath from 'node:path';
@@ -127,12 +119,19 @@ import __bannerUrl from 'node:url';
 globalThis.require = __bannerCrReq(import.meta.url);
 globalThis.__filename = __bannerUrl.fileURLToPath(import.meta.url);
 globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
-    `,
-    },
+`
+    }
   });
+
+  const output = await stat(entryFile);
+  if (!output.isFile() || output.size === 0) {
+    throw new Error(`API build did not produce a non-empty entrypoint: ${entryFile}`);
+  }
+
+  console.info(`Verified production entrypoint: ${entryFile} (${output.size} bytes)`);
 }
 
 buildAll().catch((err) => {
-  console.error(err);
+  console.error("API production build failed:", err);
   process.exit(1);
 });
