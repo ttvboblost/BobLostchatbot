@@ -1,12 +1,11 @@
-import { pool } from "@workspace/db";
+import { pool, type PoolClient } from "@workspace/db";
 
 const LOCK_NAMESPACE = 1_112_499_772;
 const LOCK_RESOURCE = 1_464_346_945;
 
 export function createWhatsAppInstanceLock(
-  connect: () => ReturnType<typeof pool.connect> = () => pool.connect(),
+  connect: () => Promise<PoolClient> = () => pool.connect(),
 ) {
-  type PoolClient = Awaited<ReturnType<typeof pool.connect>>;
   let owner: PoolClient | null = null;
   let acquiring: Promise<boolean> | null = null;
 
