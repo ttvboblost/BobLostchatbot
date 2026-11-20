@@ -1,8 +1,8 @@
-name: Validate WhatsApp backend
+name: Validate and prepare Zenifra backend
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/zenifra-npm-workspace"]
     paths:
       - "artifacts/api-server/**"
       - "lib/db/**"
@@ -19,6 +19,7 @@ on:
       - "lib/db/**"
       - "lib/api-zod/**"
       - "package.json"
+      - "package-lock.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "scripts/**"
@@ -26,7 +27,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   validate:
@@ -50,6 +51,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          persist-credentials: true
       - name: Setup pnpm
         uses: pnpm/action-setup@v6.1.1
         with:
@@ -57,21 +60,33 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+          node-version: 24
+      - name: Refresh PNPM lockfile
+        run: pnpm install --lockfile-only --no-frozen-lockfile --ignore-scripts
+      - name: Generate npm lockfile for Zenifra
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit reproducible lockfiles
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --short -- package-lock.json pnpm-lock.yaml)" ]; then
+            git add package-lock.json pnpm-lock.yaml
+            git commit -m "Add npm lockfile for Zenifra deployment"
+            git push
+          fi
+      - name: Install exactly as Zenifra does
+        run: npm ci --no-audit --no-fund
       - name: Build shared TypeScript packages
-        run: pnpm run typecheck:libs
+        run: npm run typecheck:libs
       - name: Typecheck backend
-        run: pnpm --filter @workspace/api-server run typecheck
-      - name: Build production API bundle
-        run: pnpm --filter @workspace/api-server run build
+        run: npm run typecheck --workspace=@workspace/api-server
+      - name: Build production API
+        run: npm run build
       - name: Verify production entrypoint
         run: test -s artifacts/api-server/dist/index.mjs
       - name: Prepare test database
-        run: pnpm --filter @workspace/db run push
+        run: npm run push --workspace=@workspace/db
       - name: Run backend tests
         env:
           RUN_DB_INTEGRATION_TESTS: "true"
-        run: pnpm --filter @workspace/api-server run test
+        run: npm run test --workspace=@workspace/api-server
