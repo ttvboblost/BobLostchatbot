@@ -36,13 +36,13 @@ minimumReleaseAgeExclude:
   - '@replit/*'
   - stripe-replit-sync
 
-onlyBuiltDependencies:
-  - '@swc/core'
-  - baileys
-  - esbuild
-  - msw
-  - protobufjs
-  - unrs-resolver
+allowBuilds:
+  '@swc/core': true
+  baileys: true
+  esbuild: true
+  msw: true
+  protobufjs: true
+  unrs-resolver: true
 
 overrides:
   '@esbuild-kit/esm-loader': npm:tsx@^4.21.0
