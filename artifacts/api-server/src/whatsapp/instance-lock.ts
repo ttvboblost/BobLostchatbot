@@ -1,6 +1,6 @@
 import { pool } from "@workspace/db";
 
-type PoolClient = Awaited<ReturnType<typeof pool.connect>>;
+import type { PoolClient } from "@workspace/db";
 
 const LOCK_NAMESPACE = 1_112_499_772;
 const LOCK_RESOURCE = 1_464_346_945;
