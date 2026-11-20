@@ -1,4 +1,8 @@
 import { createRoot } from 'react-dom/client';
+import { setBaseUrl } from '@workspace/api-client-react';
+
+// Android builds can point the bundled dashboard at the separately hosted API.
+setBaseUrl(import.meta.env.VITE_API_BASE_URL || null);
 
 import App from './App';
 import { ErrorBoundary } from '@/components/error-boundary';
