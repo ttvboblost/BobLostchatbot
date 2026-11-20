@@ -9,7 +9,7 @@ import {
   db,
   processedMessageEventsTable,
 } from "@workspace/db";
-import type { ActiveSocket } from "../whatsapp/state.js";
+import { whatsappState, type ActiveSocket } from "../whatsapp/state.js";
 import { publishEvent } from "../websocket/hub.js";
 import {
   isMessageEligibleForReply,
@@ -490,6 +490,34 @@ export async function processIncomingCommand(
   }
 
   if (!parsed) return;
+
+  if (parsed.name === "status") {
+    const statusLabels: Record<string, string> = {
+      connected: "CONECTADO",
+      connecting: "CONECTANDO",
+      waiting_qr: "AGUARDANDO LEITURA DO QR CODE",
+      disconnected: "DESCONECTADO",
+      error: "ERRO NA CONEXÃO",
+    };
+    const response = `🤖 Status do WhatsApp: ${statusLabels[whatsappState.status] ?? "INDEFINIDO"}`;
+    const sendResult = await sendGroupReply(message, response, {
+      action: "command_status",
+    });
+    await writeCommandLog(
+      message.groupId,
+      message.senderJid,
+      "status",
+      sendResult.sent ? "executed" : "send_failed",
+      null,
+      sendResult.failure,
+    );
+    publishEvent("command.executed", {
+      groupId: message.groupId,
+      commandName: "status",
+      status: sendResult.sent ? "executed" : "send_failed",
+    });
+    return;
+  }
 
   const [command] = await db
     .select()
