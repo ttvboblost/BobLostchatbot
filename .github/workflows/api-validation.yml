@@ -27,6 +27,22 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: boblost_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d boblost_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/boblost_ci
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -45,8 +61,9 @@ jobs:
         run: pnpm run typecheck:libs
       - name: Typecheck backend
         run: pnpm --filter @workspace/api-server run typecheck
+      - name: Prepare test database
+        run: pnpm --filter @workspace/db run push
       - name: Run backend tests
         env:
-          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/boblost_ci
-          RUN_DB_INTEGRATION_TESTS: "false"
+          RUN_DB_INTEGRATION_TESTS: "true"
         run: pnpm --filter @workspace/api-server run test
