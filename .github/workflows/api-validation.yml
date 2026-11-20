@@ -1,0 +1,52 @@
+name: Validate WhatsApp backend
+
+on:
+  push:
+    branches: [main, "fix/**", "test/**"]
+    paths:
+      - "artifacts/api-server/**"
+      - "lib/db/**"
+      - "lib/api-zod/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api-validation.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "artifacts/api-server/**"
+      - "lib/db/**"
+      - "lib/api-zod/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/api-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6.1.1
+        with:
+          version: 10
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build shared TypeScript packages
+        run: pnpm run typecheck:libs
+      - name: Typecheck backend
+        run: pnpm --filter @workspace/api-server run typecheck
+      - name: Run backend tests
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/boblost_ci
+          RUN_DB_INTEGRATION_TESTS: "false"
+        run: pnpm --filter @workspace/api-server run test

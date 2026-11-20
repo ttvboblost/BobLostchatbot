@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 
-const canRunDatabaseTest = Boolean(process.env["DATABASE_URL"]);
+const canRunDatabaseTest =
+  process.env["RUN_DB_INTEGRATION_TESTS"] === "true" &&
+  Boolean(process.env["DATABASE_URL"]);
 let closeDatabase: (() => Promise<void>) | undefined;
 
 test(
