@@ -555,6 +555,7 @@ export async function processIncomingCommand(
       .orderBy(commandsTable.name);
     const commandNames = new Set(activeCommands.map(({ name }) => name));
     commandNames.add("afk");
+    commandNames.add("status");
     const dynamicList = `Comandos disponíveis: ${[...commandNames]
       .sort((left, right) => left.localeCompare(right))
       .map((name) => `!${name}`)
