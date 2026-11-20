@@ -222,7 +222,7 @@ router.delete("/commands/:id", async (req, res): Promise<void> => {
     });
     return;
   }
-  if (current.name === "afk") {
+  if (current.name === "afk" || current.name === "status") {
     sendNativeCommandError(res);
     return;
   }
@@ -278,7 +278,7 @@ async function setCommandActive(
     });
     return;
   }
-  if (current.name === "afk") {
+  if (current.name === "afk" || current.name === "status") {
     sendNativeCommandError(res);
     return;
   }
