@@ -429,6 +429,17 @@ async function processMessages(
       content,
       message.messageStubType,
     );
+    logger.info(
+      {
+        groupId,
+        messageId,
+        hasText: Boolean(text?.trim()),
+        startsWithCommand: Boolean(text?.trim().startsWith("!")),
+        senderPresent: Boolean(message.key.participant ?? message.key.participantAlt),
+        mentionedCount: mentionedJids.length,
+      },
+      "Mensagem de grupo recebida pelo processador do bot",
+    );
     if (!text?.trim() && mentionedJids.length === 0 && !hasUserContent) {
       continue;
     }
@@ -709,7 +720,17 @@ async function openWhatsAppConnection(): Promise<void> {
       ) {
         return;
       }
-      if (type !== "notify") return;
+      if (type !== "notify") {
+        logger.debug(
+          { type, messageCount: messages.length },
+          "Evento de mensagens ignorado por não ser uma notificação nova",
+        );
+        return;
+      }
+      logger.info(
+        { messageCount: messages.length },
+        "Evento de novas mensagens recebido do WhatsApp",
+      );
       void processMessages(activeSocket, messages).catch((error: unknown) => {
         logger.error(
           safeErrorDetails(error),
