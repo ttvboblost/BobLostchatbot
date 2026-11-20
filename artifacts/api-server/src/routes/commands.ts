@@ -6,6 +6,7 @@ import { recordAdminAudit } from "../lib/admin-audit.js";
 
 const router: IRouter = Router();
 const NATIVE_AFK_ID = "00000000-0000-4000-8000-000000000001";
+const NATIVE_STATUS_ID = "00000000-0000-4000-8000-000000000002";
 const NATIVE_AFK_DESCRIPTION =
   "Comando nativo: ativa o AFK neste grupo e avisa quando alguém mencionar você.";
 const NATIVE_AFK_RESPONSE =
@@ -19,8 +20,8 @@ const commandNameSchema = z
     z
       .string()
       .regex(/^[a-z0-9][a-z0-9_-]{0,31}$/)
-      .refine((value) => value !== "afk", {
-        message: "!afk é um comando reservado do sistema.",
+      .refine((value) => value !== "afk" && value !== "status", {
+        message: "!afk e !status são comandos reservados do sistema.",
       }),
   );
 
@@ -51,11 +52,21 @@ router.get("/commands", async (_req, res): Promise<void> => {
   const savedCommands = await db
     .select()
     .from(commandsTable)
-    .where(ne(commandsTable.name, "afk"))
+    .where(and(ne(commandsTable.name, "afk"), ne(commandsTable.name, "status")) )
     .orderBy(commandsTable.name);
   const now = new Date().toISOString();
   const commands = [
     ...savedCommands.map((command) => ({ ...command, isNative: false })),
+    {
+      id: NATIVE_STATUS_ID,
+      name: "status",
+      description: "Comando nativo: mostra somente o estado da conexão do WhatsApp.",
+      responseContent: "Mostra se o WhatsApp está conectado.",
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+      isNative: true,
+    },
     {
       id: NATIVE_AFK_ID,
       name: "afk",
@@ -129,7 +140,7 @@ router.patch("/commands/:id", async (req, res): Promise<void> => {
     });
     return;
   }
-  if (current.name === "afk") {
+  if (current.name === "afk" || current.name === "status") {
     sendNativeCommandError(res);
     return;
   }
@@ -303,7 +314,7 @@ function sendNativeCommandError(res: Response): void {
     success: false,
     error: {
       code: "NATIVE_COMMAND",
-      message: "!afk é nativo e não pode ser alterado pelo painel.",
+      message: "!afk e !status são nativos e não podem ser alterados pelo painel.",
     },
   });
 }
