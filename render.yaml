@@ -1,0 +1,37 @@
+# BobLost Chatbot — Render Blueprint
+# The WhatsApp connection needs an always-on service and persistent PostgreSQL.
+# Keep this service on a paid always-on instance; do not use a sleeping free instance.
+
+services:
+  - type: web
+    name: boblost-chatbot-api
+    runtime: node
+    region: ohio
+    plan: starter
+    buildCommand: corepack enable && corepack prepare pnpm@10 --activate && pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server run build
+    startCommand: pnpm --filter @workspace/api-server run start
+    healthCheckPath: /api/healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: boblost-chatbot-db
+          property: connectionString
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_CORS_ORIGINS
+        value: "https://localhost,capacitor://localhost,http://localhost"
+
+databases:
+  - name: boblost-chatbot-db
+    databaseName: boblost_chatbot
+    user: boblost_app
+    region: ohio
+    plan: basic-256mb
+    postgresMajorVersion: "16"
