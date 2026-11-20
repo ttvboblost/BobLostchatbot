@@ -2,14 +2,18 @@
   "name": "workspace",
   "version": "0.0.0",
   "license": "MIT",
-  "scripts": {
-    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm --filter @workspace/api-server run build",
-    "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "start": "pnpm --filter @workspace/api-server run start"
-  },
   "private": true,
+  "workspaces": [
+    "artifacts/api-server",
+    "lib/db",
+    "lib/api-zod"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@workspace/api-server",
+    "start": "npm run start --workspace=@workspace/api-server",
+    "typecheck:libs": "tsc --build lib/db lib/api-zod",
+    "typecheck": "npm run typecheck:libs && npm run typecheck --workspace=@workspace/api-server"
+  },
   "devDependencies": {
     "prettier": "^3.8.3",
     "typescript": "~5.9.3"

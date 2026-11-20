@@ -5,6 +5,7 @@ import {
   extractMentionedJids,
   hasNormalUserContent,
 } from "./bot.js";
+import type { ActiveSocket } from "./state.js";
 
 test("reads and deduplicates participant JIDs from Baileys mention context", () => {
   assert.deepEqual(
@@ -37,7 +38,7 @@ test("counts stickers as user activity but ignores protocol and system events", 
 test("retries a transient Baileys send after reconnect with the same message ID", async () => {
   const destinations: string[] = [];
   const messageIds: string[] = [];
-  const firstSocket = {
+  const firstSocket: ActiveSocket = {
     sendMessage: async (
       jid: string,
       _content: { text: string; mentions?: string[] },
@@ -53,7 +54,7 @@ test("retries a transient Baileys send after reconnect with the same message ID"
     logout: async () => {},
     end: () => {},
   };
-  const secondSocket = {
+  const secondSocket: ActiveSocket = {
     ...firstSocket,
     sendMessage: async (
       jid: string,

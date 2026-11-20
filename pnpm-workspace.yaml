@@ -4,6 +4,8 @@ packages:
   - lib/integrations/*
   - scripts
 
+linkWorkspacePackages: true
+
 autoInstallPeers: false
 
 catalog:
