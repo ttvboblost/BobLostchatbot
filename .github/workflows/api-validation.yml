@@ -46,4 +46,7 @@ jobs:
       - name: Typecheck backend
         run: pnpm --filter @workspace/api-server run typecheck
       - name: Run backend tests
+        env:
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/boblost_ci
+          RUN_DB_INTEGRATION_TESTS: "false"
         run: pnpm --filter @workspace/api-server run test
