@@ -42,7 +42,7 @@ test("retries a transient Baileys send after reconnect with the same message ID"
       jid: string,
       _content: { text: string; mentions?: string[] },
       options?: { messageId?: string },
-    ) => {
+    ): Promise<{ key: { id: string | undefined } }> => {
       destinations.push(jid);
       messageIds.push(options?.messageId ?? "");
       throw Object.assign(new Error("Connection Closed"), {
