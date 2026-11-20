@@ -8,6 +8,7 @@ on:
       - "lib/db/**"
       - "lib/api-zod/**"
       - "package.json"
+      - ".npmrc"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
       - "scripts/**"
