@@ -53,7 +53,7 @@ router.get("/commands", async (_req, res): Promise<void> => {
     .select()
     .from(commandsTable)
     .where(and(ne(commandsTable.name, "afk"),
-          ne(commandsTable.name, "status"), ne(commandsTable.name, "status")))
+          ne(commandsTable.name, "status"), ne(commandsTable.name, "status")) )
     .orderBy(commandsTable.name);
   const now = new Date().toISOString();
   const commands = [
@@ -155,6 +155,7 @@ router.patch("/commands/:id", async (req, res): Promise<void> => {
         and(
           eq(commandsTable.id, params.data.id),
           ne(commandsTable.name, "afk"),
+          ne(commandsTable.name, "status"),
         ),
       )
       .returning();
@@ -223,7 +224,7 @@ router.delete("/commands/:id", async (req, res): Promise<void> => {
     });
     return;
   }
-  if (current.name === "afk") {
+  if (current.name === "afk" || current.name === "status") {
     sendNativeCommandError(res);
     return;
   }
@@ -234,6 +235,7 @@ router.delete("/commands/:id", async (req, res): Promise<void> => {
       and(
         eq(commandsTable.id, params.data.id),
         ne(commandsTable.name, "afk"),
+          ne(commandsTable.name, "status"),
       ),
     )
     .returning({ id: commandsTable.id });
@@ -279,7 +281,7 @@ async function setCommandActive(
     });
     return;
   }
-  if (current.name === "afk") {
+  if (current.name === "afk" || current.name === "status") {
     sendNativeCommandError(res);
     return;
   }
@@ -291,6 +293,7 @@ async function setCommandActive(
       and(
         eq(commandsTable.id, params.data.id),
         ne(commandsTable.name, "afk"),
+          ne(commandsTable.name, "status"),
       ),
     )
     .returning();
