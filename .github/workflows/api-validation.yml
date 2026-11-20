@@ -41,6 +41,8 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Build shared TypeScript packages
+        run: pnpm run typecheck:libs
       - name: Typecheck backend
         run: pnpm --filter @workspace/api-server run typecheck
       - name: Run backend tests
